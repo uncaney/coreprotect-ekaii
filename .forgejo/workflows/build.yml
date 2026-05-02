@@ -34,12 +34,22 @@ jobs:
           java-version: ${{ matrix.jdk }}
           distribution: temurin
       - name: Install Maven
+        shell: bash
         run: |
-          apt-get update -qq && apt-get install -y -qq --no-install-recommends curl ca-certificates
-          curl -fsSL -o /tmp/mvn.tar.gz https://dlcdn.apache.org/maven/maven-3/3.9.9/binaries/apache-maven-3.9.9-bin.tar.gz
-          mkdir -p /opt/maven && tar -C /opt/maven --strip-components=1 -xzf /tmp/mvn.tar.gz
-          ln -sf /opt/maven/bin/mvn /usr/local/bin/mvn
-          mvn -v
+          set -eux
+          MVN_VERSION=3.9.9
+          MVN_URL="https://dlcdn.apache.org/maven/maven-3/${MVN_VERSION}/binaries/apache-maven-${MVN_VERSION}-bin.tar.gz"
+          MVN_BACKUP_URL="https://archive.apache.org/dist/maven/maven-3/${MVN_VERSION}/binaries/apache-maven-${MVN_VERSION}-bin.tar.gz"
+          MVN_HOME="$HOME/.tools/maven-${MVN_VERSION}"
+          mkdir -p "$MVN_HOME" "$HOME/.tools"
+          if command -v curl >/dev/null 2>&1; then
+            curl -fsSL "$MVN_URL" -o /tmp/mvn.tgz || curl -fsSL "$MVN_BACKUP_URL" -o /tmp/mvn.tgz
+          else
+            wget -q "$MVN_URL" -O /tmp/mvn.tgz || wget -q "$MVN_BACKUP_URL" -O /tmp/mvn.tgz
+          fi
+          tar -C "$MVN_HOME" --strip-components=1 -xzf /tmp/mvn.tgz
+          echo "$MVN_HOME/bin" >> "$GITHUB_PATH"
+          "$MVN_HOME/bin/mvn" -v
       - name: Build
         run: mvn -B -DskipTests -Dproject.branch=master clean verify
       - name: Show artifact
@@ -68,12 +78,22 @@ jobs:
           java-version: '25'
           distribution: temurin
       - name: Install Maven
+        shell: bash
         run: |
-          apt-get update -qq && apt-get install -y -qq --no-install-recommends curl ca-certificates
-          curl -fsSL -o /tmp/mvn.tar.gz https://dlcdn.apache.org/maven/maven-3/3.9.9/binaries/apache-maven-3.9.9-bin.tar.gz
-          mkdir -p /opt/maven && tar -C /opt/maven --strip-components=1 -xzf /tmp/mvn.tar.gz
-          ln -sf /opt/maven/bin/mvn /usr/local/bin/mvn
-          mvn -v
+          set -eux
+          MVN_VERSION=3.9.9
+          MVN_URL="https://dlcdn.apache.org/maven/maven-3/${MVN_VERSION}/binaries/apache-maven-${MVN_VERSION}-bin.tar.gz"
+          MVN_BACKUP_URL="https://archive.apache.org/dist/maven/maven-3/${MVN_VERSION}/binaries/apache-maven-${MVN_VERSION}-bin.tar.gz"
+          MVN_HOME="$HOME/.tools/maven-${MVN_VERSION}"
+          mkdir -p "$MVN_HOME" "$HOME/.tools"
+          if command -v curl >/dev/null 2>&1; then
+            curl -fsSL "$MVN_URL" -o /tmp/mvn.tgz || curl -fsSL "$MVN_BACKUP_URL" -o /tmp/mvn.tgz
+          else
+            wget -q "$MVN_URL" -O /tmp/mvn.tgz || wget -q "$MVN_BACKUP_URL" -O /tmp/mvn.tgz
+          fi
+          tar -C "$MVN_HOME" --strip-components=1 -xzf /tmp/mvn.tgz
+          echo "$MVN_HOME/bin" >> "$GITHUB_PATH"
+          "$MVN_HOME/bin/mvn" -v
       - name: Build current ref
         run: mvn -B -DskipTests -Dproject.branch=master clean verify
       - name: Build mc1.21.11 sibling
