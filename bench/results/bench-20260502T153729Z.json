@@ -1,0 +1,61 @@
+{
+  "args": {
+    "rows": 500000,
+    "extra_inserts": 20000,
+    "scans": 30,
+    "skip_pg": false,
+    "skip_sqlite": false
+  },
+  "results": [
+    {
+      "scenario": "sqlite",
+      "rows_seeded": 500000,
+      "seed_ms": 2545.05,
+      "insert_extra_rows": 20000,
+      "insert_ms": 140.96,
+      "insert_rows_per_sec": 141881.0,
+      "scan_count": 30,
+      "scan_p50_ms": 12.798,
+      "scan_p95_ms": 15.738,
+      "scan_max_ms": 16.158,
+      "footprint_bytes": 154771456,
+      "retention_ms": 9442.1,
+      "retention_rows_deleted": 333517,
+      "retention_partitions_dropped": 0
+    },
+    {
+      "scenario": "pg-flat",
+      "rows_seeded": 500000,
+      "seed_ms": 10723.05,
+      "insert_extra_rows": 20000,
+      "insert_ms": 391.23,
+      "insert_rows_per_sec": 51120.8,
+      "scan_count": 30,
+      "scan_p50_ms": 1.005,
+      "scan_p95_ms": 1.432,
+      "scan_max_ms": 5.353,
+      "footprint_bytes": 222560256,
+      "footprint_indexes_bytes": 80494592,
+      "retention_ms": 1418.48,
+      "retention_rows_deleted": 333517,
+      "retention_partitions_dropped": 0
+    },
+    {
+      "scenario": "pg-partitioned-lz4",
+      "rows_seeded": 500000,
+      "seed_ms": 11454.35,
+      "insert_extra_rows": 20000,
+      "insert_ms": 418.93,
+      "insert_rows_per_sec": 47740.2,
+      "scan_count": 30,
+      "scan_p50_ms": 9.159,
+      "scan_p95_ms": 17.503,
+      "scan_max_ms": 20.546,
+      "footprint_bytes": 233226240,
+      "footprint_indexes_bytes": 90718208,
+      "retention_ms": 105.38,
+      "retention_rows_deleted": 0,
+      "retention_partitions_dropped": 9
+    }
+  ]
+}
