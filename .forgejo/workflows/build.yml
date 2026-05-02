@@ -35,7 +35,7 @@ jobs:
           distribution: temurin
           cache: maven
       - name: Build
-        run: mvn -B -DskipTests clean verify
+        run: mvn -B -DskipTests -Dproject.branch=master clean verify
       - name: Show artifact
         run: ls -la target/CoreProtect-*.jar
       - name: Upload jar
