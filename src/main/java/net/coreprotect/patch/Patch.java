@@ -52,7 +52,11 @@ public class Patch {
     public static Integer[] getDatabaseVersion(Connection connection, boolean lastVersion) {
         Integer[] last_version = new Integer[] { 0, 0, 0 };
         try {
-            String query = "SELECT version FROM " + ConfigHandler.prefix + "version ORDER BY rowid " + (lastVersion ? "DESC" : "ASC") + " LIMIT 0, 1";
+            // LIMIT 0, 1 is MySQL/SQLite syntax; PostgreSQL needs LIMIT 1 OFFSET 0.
+            String limitClause = (ConfigHandler.backend() == net.coreprotect.database.Backend.POSTGRES)
+                    ? " LIMIT 1 OFFSET 0"
+                    : " LIMIT 0, 1";
+            String query = "SELECT version FROM " + ConfigHandler.prefix + "version ORDER BY rowid " + (lastVersion ? "DESC" : "ASC") + limitClause;
             Statement statement = connection.createStatement();
             ResultSet rs = statement.executeQuery(query);
             while (rs.next()) {

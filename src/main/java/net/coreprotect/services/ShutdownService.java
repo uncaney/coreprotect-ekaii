@@ -51,6 +51,7 @@ public class ShutdownService {
             }
 
             ConfigHandler.serverRunning = false;
+            try { RetentionService.get().stop(); } catch (Throwable ignored) {}
             long shutdownTime = System.currentTimeMillis();
             long nextAlertTime = shutdownTime + ALERT_INTERVAL_MS;
 

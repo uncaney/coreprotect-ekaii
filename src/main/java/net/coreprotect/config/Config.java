@@ -40,6 +40,17 @@ public class Config extends Language {
     public String MYSQL_USERNAME;
     public String MYSQL_PASSWORD;
     public String LANGUAGE;
+    /** "auto" | "sqlite" | "mysql" | "postgres". "auto" honours the legacy use-mysql boolean. */
+    public String DATABASE_BACKEND;
+    public String POSTGRES_HOST;
+    public String POSTGRES_DATABASE;
+    public String POSTGRES_USERNAME;
+    public String POSTGRES_PASSWORD;
+    public int POSTGRES_PORT;
+    public boolean POSTGRES_SSL;
+    public boolean RETENTION_ENABLED;
+    public String RETENTION_KEEP;
+    public String RETENTION_SCHEDULE;
     public boolean ENABLE_SSL;
     public boolean DISABLE_WAL;
     public boolean HOVER_EVENTS;
@@ -103,6 +114,16 @@ public class Config extends Language {
         DEFAULT_VALUES.put("mysql-database", "database");
         DEFAULT_VALUES.put("mysql-username", "root");
         DEFAULT_VALUES.put("mysql-password", "");
+        DEFAULT_VALUES.put("database-backend", "auto");
+        DEFAULT_VALUES.put("postgres-host", "127.0.0.1");
+        DEFAULT_VALUES.put("postgres-port", "5432");
+        DEFAULT_VALUES.put("postgres-database", "coreprotect");
+        DEFAULT_VALUES.put("postgres-username", "coreprotect");
+        DEFAULT_VALUES.put("postgres-password", "");
+        DEFAULT_VALUES.put("postgres-ssl", "false");
+        DEFAULT_VALUES.put("retention-enabled", "false");
+        DEFAULT_VALUES.put("retention-keep", "60d");
+        DEFAULT_VALUES.put("retention-schedule", "0 4 * * *");
         DEFAULT_VALUES.put("language", "en");
         DEFAULT_VALUES.put("check-updates", "true");
         DEFAULT_VALUES.put("api-enabled", "true");
@@ -147,6 +168,11 @@ public class Config extends Language {
 
         HEADERS.put("donation-key", new String[] { "# CoreProtect is donationware. Obtain a donation key from coreprotect.net/donate/" });
         HEADERS.put("use-mysql", new String[] { "# MySQL is optional and not required.", "# If you prefer to use MySQL, enable the following and fill out the fields." });
+        HEADERS.put("database-backend", new String[] { "# Storage backend: 'auto' (honours use-mysql), 'sqlite', 'mysql', or 'postgres'.", "# Postgres uses partition-friendly DDL with BRIN(time) and lz4 compression on hot blob columns." });
+        HEADERS.put("postgres-host", new String[] { "# PostgreSQL connection settings — only used when database-backend is 'postgres'." });
+        HEADERS.put("retention-enabled", new String[] { "# Auto-retention: periodically deletes data older than retention-keep.", "# When disabled (default), data is kept forever (legacy behaviour).", "# Manual purge via /co purge t:<time> still works regardless of this setting." });
+        HEADERS.put("retention-keep", new String[] { "# Maximum age of retained data. Examples: 30d (30 days), 8w, 6mo, 1y. Set to '0' to disable." });
+        HEADERS.put("retention-schedule", new String[] { "# Cron schedule (5-field UTC) for the retention sweeper. Defaults to daily 04:00 UTC." });
         HEADERS.put("language", new String[] { "# If modified, will automatically attempt to translate languages phrases.", "# List of language codes: https://coreprotect.net/languages/" });
         HEADERS.put("check-updates", new String[] { "# If enabled, CoreProtect will check for updates when your server starts up.", "# If an update is available, you'll be notified via your server console.", });
         HEADERS.put("api-enabled", new String[] { "# If enabled, other plugins will be able to utilize the CoreProtect API.", });
@@ -210,6 +236,16 @@ public class Config extends Language {
         this.MYSQL_DATABASE = this.getString("mysql-database");
         this.MYSQL_USERNAME = this.getString("mysql-username");
         this.MYSQL_PASSWORD = this.getString("mysql-password");
+        this.DATABASE_BACKEND = this.getString("database-backend");
+        this.POSTGRES_HOST = this.getString("postgres-host");
+        this.POSTGRES_PORT = this.getInt("postgres-port", 5432);
+        this.POSTGRES_DATABASE = this.getString("postgres-database");
+        this.POSTGRES_USERNAME = this.getString("postgres-username");
+        this.POSTGRES_PASSWORD = this.getString("postgres-password");
+        this.POSTGRES_SSL = this.getBoolean("postgres-ssl", false);
+        this.RETENTION_ENABLED = this.getBoolean("retention-enabled", false);
+        this.RETENTION_KEEP = this.getString("retention-keep");
+        this.RETENTION_SCHEDULE = this.getString("retention-schedule");
         this.LANGUAGE = this.getString("language");
         this.CHECK_UPDATES = this.getBoolean("check-updates");
         this.API_ENABLED = this.getBoolean("api-enabled");

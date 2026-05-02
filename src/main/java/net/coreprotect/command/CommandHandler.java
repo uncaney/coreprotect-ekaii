@@ -95,6 +95,9 @@ public class CommandHandler implements CommandExecutor {
                 else if (corecommand.equals("purge")) {
                     PurgeCommand.runCommand(user, permission, argumentArray);
                 }
+                else if (corecommand.equals("retention")) {
+                    RetentionCommand.runCommand(user, permission, argumentArray);
+                }
                 else if (corecommand.equals("inspect") || corecommand.equals("i")) {
                     InspectCommand.runCommand(user, permission, argumentArray);
                 }
