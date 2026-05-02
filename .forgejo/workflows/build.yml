@@ -33,7 +33,13 @@ jobs:
         with:
           java-version: ${{ matrix.jdk }}
           distribution: temurin
-          cache: maven
+      - name: Install Maven
+        run: |
+          apt-get update -qq && apt-get install -y -qq --no-install-recommends curl ca-certificates
+          curl -fsSL -o /tmp/mvn.tar.gz https://dlcdn.apache.org/maven/maven-3/3.9.9/binaries/apache-maven-3.9.9-bin.tar.gz
+          mkdir -p /opt/maven && tar -C /opt/maven --strip-components=1 -xzf /tmp/mvn.tar.gz
+          ln -sf /opt/maven/bin/mvn /usr/local/bin/mvn
+          mvn -v
       - name: Build
         run: mvn -B -DskipTests -Dproject.branch=master clean verify
       - name: Show artifact
@@ -61,19 +67,23 @@ jobs:
         with:
           java-version: '25'
           distribution: temurin
-          cache: maven
+      - name: Install Maven
+        run: |
+          apt-get update -qq && apt-get install -y -qq --no-install-recommends curl ca-certificates
+          curl -fsSL -o /tmp/mvn.tar.gz https://dlcdn.apache.org/maven/maven-3/3.9.9/binaries/apache-maven-3.9.9-bin.tar.gz
+          mkdir -p /opt/maven && tar -C /opt/maven --strip-components=1 -xzf /tmp/mvn.tar.gz
+          ln -sf /opt/maven/bin/mvn /usr/local/bin/mvn
+          mvn -v
       - name: Build current ref
-        run: mvn -B -DskipTests clean verify
+        run: mvn -B -DskipTests -Dproject.branch=master clean verify
       - name: Build mc1.21.11 sibling
         run: |
           git fetch origin mc1.21.11
           git worktree add ../mc1.21.11 origin/mc1.21.11
           cd ../mc1.21.11
-          # JDK 21 needed; install via apt (temurin already there is JDK 25)
-          apt-get update && apt-get install -y wget
-          wget -q https://download.java.net/java/GA/jdk21.0.4/d2c2e0e7e3ee43f2a1a0e7eaf21ee5c5/35/GPL/openjdk-21.0.4_linux-x64_bin.tar.gz -O /tmp/jdk21.tar.gz
+          curl -fsSL -o /tmp/jdk21.tar.gz https://download.java.net/java/GA/jdk21.0.4/d2c2e0e7e3ee43f2a1a0e7eaf21ee5c5/35/GPL/openjdk-21.0.4_linux-x64_bin.tar.gz
           mkdir -p /opt/jdk21 && tar -C /opt/jdk21 --strip-components=1 -xzf /tmp/jdk21.tar.gz
-          JAVA_HOME=/opt/jdk21 PATH=/opt/jdk21/bin:$PATH mvn -B -DskipTests clean verify
+          JAVA_HOME=/opt/jdk21 PATH=/opt/jdk21/bin:$PATH mvn -B -DskipTests -Dproject.branch=master clean verify
       - name: Create release
         env:
           TOKEN: ${{ secrets.GITHUB_TOKEN }}
