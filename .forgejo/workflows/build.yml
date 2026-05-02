@@ -1,0 +1,98 @@
+name: Build CoreProtect (ekaii fork)
+on:
+  push:
+    branches: [master, mc1.21.11]
+    tags: ['v*']
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build (${{ matrix.label }})
+    runs-on: ubuntu-latest
+    container:
+      image: node:20-bookworm
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: mc26.1.2-jdk25
+            ref: refs/heads/master
+            jdk: '25'
+            artifact: CoreProtect-mc26.1.2
+          - label: mc1.21.11-jdk21
+            ref: refs/heads/mc1.21.11
+            jdk: '21'
+            artifact: CoreProtect-mc1.21.11
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.ref }}
+          fetch-depth: 0
+      - name: Set up JDK ${{ matrix.jdk }}
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ matrix.jdk }}
+          distribution: temurin
+          cache: maven
+      - name: Build
+        run: mvn -B -DskipTests clean verify
+      - name: Show artifact
+        run: ls -la target/CoreProtect-*.jar
+      - name: Upload jar
+        uses: actions/upload-artifact@v3
+        with:
+          name: ${{ matrix.artifact }}
+          path: target/CoreProtect-*.jar
+          if-no-files-found: error
+          retention-days: 30
+
+  release:
+    name: Release on tag
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    container:
+      image: node:20-bookworm
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-java@v4
+        with:
+          java-version: '25'
+          distribution: temurin
+          cache: maven
+      - name: Build current ref
+        run: mvn -B -DskipTests clean verify
+      - name: Build mc1.21.11 sibling
+        run: |
+          git fetch origin mc1.21.11
+          git worktree add ../mc1.21.11 origin/mc1.21.11
+          cd ../mc1.21.11
+          # JDK 21 needed; install via apt (temurin already there is JDK 25)
+          apt-get update && apt-get install -y wget
+          wget -q https://download.java.net/java/GA/jdk21.0.4/d2c2e0e7e3ee43f2a1a0e7eaf21ee5c5/35/GPL/openjdk-21.0.4_linux-x64_bin.tar.gz -O /tmp/jdk21.tar.gz
+          mkdir -p /opt/jdk21 && tar -C /opt/jdk21 --strip-components=1 -xzf /tmp/jdk21.tar.gz
+          JAVA_HOME=/opt/jdk21 PATH=/opt/jdk21/bin:$PATH mvn -B -DskipTests clean verify
+      - name: Create release
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          REF_NAME="${GITHUB_REF##*/}"
+          API="${GITHUB_API_URL:-https://forgejo.ekaii.fr/api/v1}"
+          REPO="${GITHUB_REPOSITORY}"
+          # create release
+          BODY=$(printf '{"tag_name":"%s","name":"%s","draft":false,"prerelease":false}' "$REF_NAME" "$REF_NAME")
+          RESP=$(curl -fsS -X POST -H "Authorization: token $TOKEN" -H "Content-Type: application/json" \
+            "$API/repos/$REPO/releases" -d "$BODY")
+          ID=$(echo "$RESP" | sed -n 's/.*"id":\s*\([0-9]*\).*/\1/p' | head -1)
+          echo "Release id: $ID"
+          # upload assets
+          for f in $(ls target/CoreProtect-*.jar) $(ls ../mc1.21.11/target/CoreProtect-*.jar); do
+            n=$(basename "$f")
+            echo "Uploading $n"
+            curl -fsS -X POST -H "Authorization: token $TOKEN" \
+              -F "attachment=@${f}" \
+              "$API/repos/$REPO/releases/$ID/assets?name=${n}"
+          done
