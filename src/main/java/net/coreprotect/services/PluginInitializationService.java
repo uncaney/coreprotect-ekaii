@@ -116,7 +116,11 @@ public class PluginInitializationService {
         PluginDescriptionFile pluginDescription = plugin.getDescription();
         ChatUtils.sendConsoleComponentStartup(Bukkit.getServer().getConsoleSender(), Phrase.build(Phrase.ENABLE_SUCCESS, ConfigHandler.EDITION_NAME));
 
-        if (Config.getGlobal().MYSQL) {
+        net.coreprotect.database.Backend backend = ConfigHandler.backend();
+        if (backend == net.coreprotect.database.Backend.POSTGRES) {
+            Chat.console("Using PostgreSQL for data storage.");
+        }
+        else if (Config.getGlobal().MYSQL) {
             Chat.console(Phrase.build(Phrase.USING_MYSQL));
         }
         else {
@@ -153,6 +157,14 @@ public class PluginInitializationService {
 
         // Start consumer
         Consumer.startConsumer();
+
+        // Start auto-retention sweeper (no-op when retention-enabled = false in config)
+        try {
+            RetentionService.get().start(plugin);
+        }
+        catch (Throwable t) {
+            t.printStackTrace();
+        }
     }
 
     /**
