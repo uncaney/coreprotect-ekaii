@@ -208,7 +208,18 @@ public class Database extends Queue {
                     }
                 }
 
-                String database = "jdbc:sqlite:" + ConfigHandler.path + ConfigHandler.sqlite + "";
+                String database;
+                if (ConfigHandler.backend() == Backend.DUCKDB) {
+                    String dbFile = Config.getGlobal().DUCKDB_PATH;
+                    if (dbFile == null || dbFile.isEmpty()) dbFile = "database.duckdb";
+                    if (!dbFile.startsWith("/") && !dbFile.contains(":\\")) {
+                        dbFile = ConfigHandler.path + dbFile;
+                    }
+                    database = "jdbc:duckdb:" + dbFile;
+                }
+                else {
+                    database = "jdbc:sqlite:" + ConfigHandler.path + ConfigHandler.sqlite + "";
+                }
                 connection = DriverManager.getConnection(database);
 
                 ConfigHandler.databaseReachable = true;

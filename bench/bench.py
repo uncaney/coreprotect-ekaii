@@ -70,7 +70,7 @@ CREATE TABLE co_block (
     "user" integer, wid integer, x integer, y integer, z integer,
     type integer, data integer, meta bytea, blockdata bytea,
     action smallint, rolled_back smallint NOT NULL DEFAULT 0,
-    PRIMARY KEY (rowid, time)
+    PRIMARY KEY (time, rowid)
 ) PARTITION BY RANGE (time);
 CREATE TABLE co_block_default PARTITION OF co_block DEFAULT;
 """
@@ -87,6 +87,19 @@ PG_PART_LZ4 = [
     'ALTER TABLE co_block ALTER COLUMN meta SET COMPRESSION lz4',
     'ALTER TABLE co_block ALTER COLUMN blockdata SET COMPRESSION lz4',
 ]
+
+DUCKDB_DDL = """
+CREATE TABLE co_block (
+    rowid BIGINT, time INTEGER NOT NULL, "user" INTEGER, wid INTEGER, x INTEGER, y INTEGER, z INTEGER,
+    type INTEGER, data INTEGER, meta BLOB, blockdata BLOB,
+    action SMALLINT, rolled_back SMALLINT NOT NULL DEFAULT 0,
+    PRIMARY KEY (time, rowid)
+);
+CREATE INDEX block_index           ON co_block (wid, x, z, time);
+CREATE INDEX block_user_index      ON co_block ("user", time);
+CREATE INDEX block_type_index      ON co_block (type, time);
+"""
+
 
 SQLITE_DDL = """
 CREATE TABLE co_block (
@@ -400,6 +413,127 @@ def pg_indexes_size(table="co_block"):
 
 # ---------------- Scenarios ----------------
 
+def scenario_duckdb(args, base_now):
+    """DuckDB embedded: in-process columnar engine. The big-bet scenario."""
+    import duckdb
+    db_path = ROOT / "results" / "_duckdb.db"
+    if db_path.exists(): db_path.unlink()
+    wal_path = ROOT / "results" / "_duckdb.db.wal"
+    if wal_path.exists(): wal_path.unlink()
+    con = duckdb.connect(str(db_path))
+    con.execute(DUCKDB_DDL)
+
+    rows = gen_rows(args.rows, base_now, 90 * 86400, args.blob_size)
+
+    # Seed via DuckDB's Appender API (the fastest path; equivalent of pgjdbc's COPY).
+    t0 = time.perf_counter()
+    _duckdb_appender_insert(con, rows, base_id=1)
+    seed_ms = (time.perf_counter() - t0) * 1000
+
+    con.execute("CHECKPOINT")
+
+    extra = gen_rows(args.extra_inserts, base_now, 86400, args.blob_size)
+    t0 = time.perf_counter()
+    _duckdb_appender_insert(con, extra, base_id=len(rows) + 1)
+    ins_ms = (time.perf_counter() - t0) * 1000
+    insert_throughput = args.extra_inserts / (ins_ms / 1000.0)
+
+    con.execute("CHECKPOINT")
+
+    scans = []
+    rng = random.Random(42)
+    for i in range(args.scans):
+        wid = rng.randrange(4)
+        time_lo = base_now - rng.randrange(7 * 86400, 60 * 86400)
+        t0 = time.perf_counter()
+        con.execute(
+            'SELECT rowid, time, x, y, z, type FROM co_block '
+            'WHERE wid = ? AND time >= ? ORDER BY time DESC LIMIT 1000',
+            [wid, time_lo],
+        ).fetchall()
+        scans.append((time.perf_counter() - t0) * 1000)
+
+    table_bytes = db_path.stat().st_size
+
+    cutoff = base_now - 30 * 86400
+    t0 = time.perf_counter()
+    deleted = 0
+    while True:
+        n = con.execute(
+            "DELETE FROM co_block WHERE rowid IN ("
+            "  SELECT rowid FROM co_block WHERE time < ? ORDER BY time ASC LIMIT 50000"
+            ")",
+            [cutoff],
+        ).fetchone()
+        # DuckDB returns affected rows in a slightly different way; fall back to count diff if needed.
+        if n is None: break
+        affected = n[0] if n else 0
+        if affected == 0: break
+        deleted += affected
+    ret_ms = (time.perf_counter() - t0) * 1000
+    con.execute("CHECKPOINT")
+    table_bytes_post = db_path.stat().st_size
+    con.close()
+
+    return {
+        "scenario": "duckdb",
+        "rows_seeded": args.rows,
+        "seed_ms": round(seed_ms, 2),
+        "insert_extra_rows": args.extra_inserts,
+        "insert_ms": round(ins_ms, 2),
+        "insert_rows_per_sec": round(insert_throughput, 1),
+        "scan_count": args.scans,
+        "scan_p50_ms": round(percentile(scans, 50), 3),
+        "scan_p95_ms": round(percentile(scans, 95), 3),
+        "scan_max_ms": round(max(scans), 3),
+        "footprint_bytes": table_bytes,
+        "footprint_bytes_post_retention": table_bytes_post,
+        "retention_ms": round(ret_ms, 2),
+        "retention_rows_deleted": deleted,
+        "retention_partitions_dropped": 0,
+    }
+
+
+def _duckdb_appender_insert(con, rows, base_id=1):
+    """Bulk-insert rows. Tries the Appender API first (fastest); falls back to a
+    register+INSERT-FROM-relation pattern if the running DuckDB version doesn't
+    expose appender on the Python connection object."""
+    # Build the data with explicit rowids.
+    full = [(base_id + i, *r) for i, r in enumerate(rows)]
+    # Path 1: register a Python-list relation and INSERT FROM it. This goes through DuckDB's
+    # vectorized executor, equivalent to the Java Appender API for our purposes.
+    try:
+        import pyarrow as pa
+        cols = list(zip(*full))
+        tbl = pa.table({
+            "rowid":       pa.array(cols[0], type=pa.int64()),
+            "time":        pa.array(cols[1], type=pa.int32()),
+            "user":        pa.array(cols[2], type=pa.int32()),
+            "wid":         pa.array(cols[3], type=pa.int32()),
+            "x":           pa.array(cols[4], type=pa.int32()),
+            "y":           pa.array(cols[5], type=pa.int32()),
+            "z":           pa.array(cols[6], type=pa.int32()),
+            "type":        pa.array(cols[7], type=pa.int32()),
+            "data":        pa.array(cols[8], type=pa.int32()),
+            "meta":        pa.array(cols[9], type=pa.binary()),
+            "blockdata":   pa.array(cols[10], type=pa.binary()),
+            "action":      pa.array(cols[11], type=pa.int16()),
+            "rolled_back": pa.array(cols[12], type=pa.int16()),
+        })
+        con.register("__cp_in", tbl)
+        con.execute("INSERT INTO co_block SELECT * FROM __cp_in")
+        con.unregister("__cp_in")
+        return
+    except Exception:
+        pass
+    # Path 2: executemany INSERT VALUES (slowest fallback).
+    con.executemany(
+        "INSERT INTO co_block (rowid,time,\"user\",wid,x,y,z,type,data,meta,blockdata,action,rolled_back) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        full,
+    )
+
+
 def scenario_sqlite(args, base_now):
     db_path = ROOT / "results" / "_sqlite.db"
     if db_path.exists():
@@ -588,6 +722,7 @@ def main():
                          "large=~600B (chest snapshots), random=mixed 80%/15%/5%.")
     ap.add_argument("--skip-pg", action="store_true")
     ap.add_argument("--skip-sqlite", action="store_true")
+    ap.add_argument("--skip-duckdb", action="store_true")
     args = ap.parse_args()
 
     print(f"# coreprotect-ekaii bench — rows={args.rows} extra={args.extra_inserts} scans={args.scans}")
@@ -599,6 +734,13 @@ def main():
     if not args.skip_sqlite:
         print(">> SQLite ...", flush=True)
         results.append(scenario_sqlite(args, base_now))
+
+    if not args.skip_duckdb:
+        try:
+            print(">> DuckDB (embedded, columnar, Appender API) ...", flush=True)
+            results.append(scenario_duckdb(args, base_now))
+        except Exception as e:
+            print(f"   skipped: {e}")
 
     if not args.skip_pg:
         try:

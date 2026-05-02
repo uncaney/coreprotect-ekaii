@@ -223,3 +223,6 @@ docs/dev/
 /.apt_generated_tests/
 bench/.venv/
 bench/results/_sqlite.db
+bench/results/_duckdb.db
+bench/results/_duckdb.db.wal
+bench/results/_sqlite.db

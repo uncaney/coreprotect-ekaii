@@ -30,6 +30,7 @@ import net.coreprotect.consumer.Queue;
 import net.coreprotect.database.Backend;
 import net.coreprotect.database.Database;
 import net.coreprotect.database.dialect.Dialect;
+import net.coreprotect.database.dialect.DuckDBDialect;
 import net.coreprotect.database.dialect.MysqlDialect;
 import net.coreprotect.database.dialect.PostgresDialect;
 import net.coreprotect.database.dialect.SqliteDialect;
@@ -281,6 +282,21 @@ public class ConfigHandler extends Queue {
                         Config.getGlobal().ENABLE_SSL);
                 break;
             }
+            case DUCKDB: {
+                activeDialect = new DuckDBDialect();
+                try {
+                    Class.forName(activeDialect.driverClassName());
+                }
+                catch (ClassNotFoundException e) {
+                    net.coreprotect.utility.Chat.console("§c[CoreProtect] DuckDB JDBC driver not on classpath. "
+                            + "Add duckdb_jdbc-1.1.x.jar to your server's libraries/ folder, then restart. "
+                            + "Falling back to SQLite for now.");
+                    activeDialect = new SqliteDialect();
+                    activeBackend = Backend.SQLITE;
+                    Config.getGlobal().MYSQL = false;
+                }
+                break;
+            }
             case SQLITE:
             default: {
                 activeDialect = new SqliteDialect();
@@ -322,6 +338,16 @@ public class ConfigHandler extends Queue {
 
     private static String nonEmpty(String preferred, String fallback) {
         return (preferred != null && !preferred.isEmpty()) ? preferred : fallback;
+    }
+
+    private static boolean classExists(String fqn) {
+        try {
+            Class.forName(fqn, false, ConfigHandler.class.getClassLoader());
+            return true;
+        }
+        catch (Throwable t) {
+            return false;
+        }
     }
 
     private static void openHikariFor(Dialect dialect, String host, int port, String database,
@@ -369,13 +395,28 @@ public class ConfigHandler extends Queue {
             config.addDataSourceProperty("preparedStatementCacheSizeMiB", "8");
             config.addDataSourceProperty("ApplicationName", "CoreProtect");
             config.addDataSourceProperty("ssl", String.valueOf(ssl));
-            // Partition-aware planner GUCs: PG defaults are off, but with our weekly partitions
-            // these typically halve scan p95 once the table exceeds a few million rows. Cheap
-            // even when partitioning is disabled (the GUCs are no-ops in that case).
-            config.setConnectionInitSql(
-                    "SET enable_partitionwise_join = on; "
-                  + "SET enable_partitionwise_aggregate = on"
-            );
+            // (1) Auto-detect a usable Unix socket when host is loopback. Saves the TCP
+            // syscall stack (~20 us round-trip on macOS/Linux). pgjdbc supports junixsocket
+            // via its socketFactory parameter when junixsocket is on the classpath.
+            String socketPath = Config.getGlobal().POSTGRES_SOCKET_PATH;
+            boolean isLoopback = host != null
+                    && (host.equals("localhost") || host.equals("127.0.0.1") || host.equals("::1") || host.equals("0.0.0.0"));
+            if (isLoopback && socketPath != null && !socketPath.isEmpty()
+                    && new java.io.File(socketPath).exists()
+                    && classExists("org.newsclub.net.unix.AFUNIXSocketFactory$FactoryArg")) {
+                config.addDataSourceProperty("socketFactory", "org.newsclub.net.unix.AFUNIXSocketFactory$FactoryArg");
+                config.addDataSourceProperty("socketFactoryArg", socketPath);
+                net.coreprotect.utility.Chat.console("[CoreProtect] Postgres: using Unix socket " + socketPath);
+            }
+            // (2) + partitionwise GUCs in one connectionInitSql.
+            StringBuilder init = new StringBuilder("SET enable_partitionwise_join = on; SET enable_partitionwise_aggregate = on");
+            if (Config.getGlobal().POSTGRES_ASYNC_COMMIT) {
+                // synchronous_commit = off: a PG crash can lose the last <600 ms of inserts.
+                // For CoreProtect this trades a recoverable observation gap for ~2x throughput.
+                init.append("; SET synchronous_commit = off");
+                net.coreprotect.utility.Chat.console("§e[CoreProtect] Postgres: synchronous_commit = OFF (a server crash can lose the last few hundred ms of logs)");
+            }
+            config.setConnectionInitSql(init.toString());
         }
         ConfigHandler.hikariDataSource = new HikariDataSource(config);
     }

@@ -51,7 +51,11 @@ public class Config extends Language {
     public boolean POSTGRES_PARTITIONING;
     public boolean POSTGRES_LZ4;
     public boolean POSTGRES_COPY_MODE;
+    public boolean POSTGRES_ASYNC_COMMIT;
     public String POSTGRES_PARTITION_INTERVAL;
+    public String POSTGRES_SOCKET_PATH;
+    public String DUCKDB_PATH;
+    public boolean DUCKDB_PARTITIONING;
     public boolean RETENTION_ENABLED;
     public String RETENTION_KEEP;
     public String RETENTION_SCHEDULE;
@@ -129,6 +133,20 @@ public class Config extends Language {
         DEFAULT_VALUES.put("postgres-lz4", "true");
         DEFAULT_VALUES.put("postgres-copy-mode", "true");
         DEFAULT_VALUES.put("postgres-partition-interval", "weekly");
+        // postgres-async-commit: trades durability for ~2x insert throughput.
+        // SET synchronous_commit = off — committed transactions return without waiting
+        // for WAL fsync. A PG crash can lose the last few hundred ms of inserts;
+        // PG never returns inconsistent or corrupt state. Acceptable for log data
+        // where a 200 ms gap on crash is recoverable from in-game observation.
+        DEFAULT_VALUES.put("postgres-async-commit", "false");
+        // postgres-socket-path: when host is localhost AND this file exists, use a
+        // Unix domain socket instead of TCP loopback. Saves ~20 us per syscall.
+        // Empty/missing = always use TCP. The standard Linux path is the default.
+        DEFAULT_VALUES.put("postgres-socket-path", "/var/run/postgresql/.s.PGSQL.5432");
+        // DuckDB: file-based embedded columnar engine. Use only one of database-backend=duckdb,
+        // sqlite, mysql, postgres at a time. duckdb-path is relative to the plugin data dir.
+        DEFAULT_VALUES.put("duckdb-path", "database.duckdb");
+        DEFAULT_VALUES.put("duckdb-partitioning", "false");
         DEFAULT_VALUES.put("retention-enabled", "false");
         DEFAULT_VALUES.put("retention-keep", "60d");
         DEFAULT_VALUES.put("retention-schedule", "0 4 * * *");
@@ -254,7 +272,11 @@ public class Config extends Language {
         this.POSTGRES_PARTITIONING = this.getBoolean("postgres-partitioning", true);
         this.POSTGRES_LZ4 = this.getBoolean("postgres-lz4", true);
         this.POSTGRES_COPY_MODE = this.getBoolean("postgres-copy-mode", true);
+        this.POSTGRES_ASYNC_COMMIT = this.getBoolean("postgres-async-commit", false);
         this.POSTGRES_PARTITION_INTERVAL = this.getString("postgres-partition-interval");
+        this.POSTGRES_SOCKET_PATH = this.getString("postgres-socket-path");
+        this.DUCKDB_PATH = this.getString("duckdb-path");
+        this.DUCKDB_PARTITIONING = this.getBoolean("duckdb-partitioning", false);
         this.RETENTION_ENABLED = this.getBoolean("retention-enabled", false);
         this.RETENTION_KEEP = this.getString("retention-keep");
         this.RETENTION_SCHEDULE = this.getString("retention-schedule");

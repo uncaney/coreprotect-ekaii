@@ -263,6 +263,23 @@
       <scope>compile</scope>
     </dependency>
     <dependency>
+      <groupId>com.kohlschutter.junixsocket</groupId>
+      <artifactId>junixsocket-core</artifactId>
+      <version>2.10.1</version>
+      <type>pom</type>
+      <scope>compile</scope>
+    </dependency>
+    <!-- DuckDB JDBC driver: provided/optional. The driver jar (~50 MB with native binaries) is too large
+         to bundle into a Bukkit plugin. Operators who select database-backend: duckdb must drop
+         duckdb_jdbc-x.y.z.jar into the server's libraries/ folder (or use Paper's libraries.json).
+         We keep it as <scope>provided</scope> so our code compiles against the API without bundling. -->
+    <dependency>
+      <groupId>org.duckdb</groupId>
+      <artifactId>duckdb_jdbc</artifactId>
+      <version>1.1.3</version>
+      <scope>provided</scope>
+    </dependency>
+    <dependency>
       <groupId>com.github.oshi</groupId>
       <artifactId>oshi-core</artifactId>
       <version>6.12.0</version>

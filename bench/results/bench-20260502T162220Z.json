@@ -1,0 +1,80 @@
+{
+  "args": {
+    "rows": 200000,
+    "extra_inserts": 20000,
+    "scans": 20,
+    "blob_size": "random",
+    "skip_pg": false,
+    "skip_sqlite": false,
+    "skip_duckdb": false
+  },
+  "results": [
+    {
+      "scenario": "sqlite",
+      "rows_seeded": 200000,
+      "seed_ms": 695.35,
+      "insert_extra_rows": 20000,
+      "insert_ms": 101.67,
+      "insert_rows_per_sec": 196707.1,
+      "scan_count": 20,
+      "scan_p50_ms": 8.149,
+      "scan_p95_ms": 9.294,
+      "scan_max_ms": 9.294,
+      "footprint_bytes": 101011456,
+      "retention_ms": 2571.12,
+      "retention_rows_deleted": 133194,
+      "retention_partitions_dropped": 0
+    },
+    {
+      "scenario": "pg-flat",
+      "rows_seeded": 200000,
+      "seed_ms": 4374.9,
+      "insert_extra_rows": 20000,
+      "insert_ms": 465.14,
+      "insert_rows_per_sec": 42997.5,
+      "scan_count": 20,
+      "scan_p50_ms": 1.083,
+      "scan_p95_ms": 3.51,
+      "scan_max_ms": 3.51,
+      "footprint_bytes": 124649472,
+      "footprint_indexes_bytes": 32342016,
+      "retention_ms": 456.27,
+      "retention_rows_deleted": 133194,
+      "retention_partitions_dropped": 0
+    },
+    {
+      "scenario": "pg-partitioned-lz4",
+      "rows_seeded": 200000,
+      "seed_ms": 4876.02,
+      "insert_extra_rows": 20000,
+      "insert_ms": 469.52,
+      "insert_rows_per_sec": 42596.4,
+      "scan_count": 20,
+      "scan_p50_ms": 1.327,
+      "scan_p95_ms": 3.848,
+      "scan_max_ms": 3.848,
+      "footprint_bytes": 134144000,
+      "footprint_indexes_bytes": 41271296,
+      "retention_ms": 80.37,
+      "retention_rows_deleted": 0,
+      "retention_partitions_dropped": 9
+    },
+    {
+      "scenario": "pg-partitioned-lz4-copy",
+      "rows_seeded": 200000,
+      "seed_ms": 1603.01,
+      "insert_extra_rows": 20000,
+      "insert_ms": 194.93,
+      "insert_rows_per_sec": 102600.9,
+      "scan_count": 20,
+      "scan_p50_ms": 1.147,
+      "scan_p95_ms": 3.662,
+      "scan_max_ms": 3.662,
+      "footprint_bytes": 139280384,
+      "footprint_indexes_bytes": 41336832,
+      "retention_ms": 74.01,
+      "retention_rows_deleted": 0,
+      "retention_partitions_dropped": 9
+    }
+  ]
+}
