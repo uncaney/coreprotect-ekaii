@@ -123,6 +123,10 @@ public final class RetentionService {
      * if a previous sweep is still in flight (large keep delta on a busy server
      * can take more than the 60-second tick interval), the second caller is
      * told it overlapped instead of doubling up DELETEs against the same ctid set.
+     *
+     * <p>On Postgres with partitioning enabled, partitioned tables (block,
+     * container) get O(1) DROP TABLE per stale week instead of chunked DELETE
+     * — typically &lt;100 ms per partition vs minutes per million rows.</p>
      */
     public Summary runNow() {
         if (keepSeconds <= 0) return Summary.skipped("retention-keep is 0/disabled");
@@ -134,18 +138,48 @@ public final class RetentionService {
         try {
             long before = (System.currentTimeMillis() / 1000L) - keepSeconds;
             int totalDeleted = 0;
+            int partitionsDropped = 0;
             long started = System.currentTimeMillis();
+
+            // Step 1: PG fast path — drop whole partitions older than retention window.
+            if (PartitionService.isActive()) {
+                try {
+                    partitionsDropped = PartitionService.dropOlderThan(before);
+                    // Also keep the upcoming-partition window healthy.
+                    PartitionService.ensureUpcoming(4);
+                }
+                catch (Throwable t) {
+                    t.printStackTrace();
+                }
+            }
+
+            // Step 2: chunked DELETE for everything not handled by partition-drop.
+            // When partitioning is active, block/container are skipped because their
+            // *_default partition catches stragglers and the weekly partitions get DROPped.
             for (String table : RETAINABLE_TABLES) {
+                if (PartitionService.isActive() && isPartitioned(table)) {
+                    // The default partition can hold legacy rows; sweep just that one.
+                    int deleted = purgeTable(dialect, table + "_default", before);
+                    totalDeleted += deleted;
+                    continue;
+                }
                 int deleted = purgeTable(dialect, table, before);
                 totalDeleted += deleted;
             }
             lastRunUnix.set(System.currentTimeMillis() / 1000L);
             long elapsed = System.currentTimeMillis() - started;
-            return Summary.success(totalDeleted, elapsed);
+            return Summary.success(totalDeleted, partitionsDropped, elapsed);
         }
         finally {
             sweepLock.unlock();
         }
+    }
+
+    private static boolean isPartitioned(String table) {
+        for (String t : net.coreprotect.database.dialect.PostgresDialect.PARTITIONED_TABLES) {
+            if (t.equals(table)) return true;
+        }
+        return false;
     }
 
     private void tick() {
@@ -223,21 +257,33 @@ public final class RetentionService {
     public static final class Summary {
         public final boolean ran;
         public final int deleted;
+        public final int partitionsDropped;
         public final long elapsedMs;
         public final String reason;
-        private Summary(boolean ran, int deleted, long elapsedMs, String reason) {
-            this.ran = ran; this.deleted = deleted; this.elapsedMs = elapsedMs; this.reason = reason;
+        private Summary(boolean ran, int deleted, int partitionsDropped, long elapsedMs, String reason) {
+            this.ran = ran; this.deleted = deleted; this.partitionsDropped = partitionsDropped;
+            this.elapsedMs = elapsedMs; this.reason = reason;
         }
-        public static Summary success(int deleted, long elapsedMs) {
-            return new Summary(true, deleted, elapsedMs, null);
+        public static Summary success(int deleted, int partitionsDropped, long elapsedMs) {
+            return new Summary(true, deleted, partitionsDropped, elapsedMs, null);
         }
         public static Summary skipped(String reason) {
-            return new Summary(false, 0, 0, reason);
+            return new Summary(false, 0, 0, 0, reason);
         }
         @Override
         public String toString() {
             if (!ran) return "skipped (" + reason + ")";
-            return "deleted " + deleted + " row(s) in " + elapsedMs + " ms";
+            StringBuilder sb = new StringBuilder();
+            if (partitionsDropped > 0) {
+                sb.append("dropped ").append(partitionsDropped).append(" partition(s)");
+            }
+            if (deleted > 0) {
+                if (sb.length() > 0) sb.append(", ");
+                sb.append("deleted ").append(deleted).append(" row(s)");
+            }
+            if (sb.length() == 0) sb.append("nothing to do");
+            sb.append(" in ").append(elapsedMs).append(" ms");
+            return sb.toString();
         }
     }
 }

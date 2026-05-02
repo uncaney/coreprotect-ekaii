@@ -305,6 +305,19 @@ public class ConfigHandler extends Queue {
         }
 
         Database.createDatabaseTables(ConfigHandler.prefix, false, null, Config.getGlobal().MYSQL, false);
+
+        // On PG with partitioning enabled, ensure the current week + lookahead partitions exist.
+        if (resolved == Backend.POSTGRES) {
+            try {
+                int created = net.coreprotect.services.PartitionService.ensureUpcoming(4);
+                if (created > 0) {
+                    net.coreprotect.utility.Chat.console("[CoreProtect] Postgres partitioning: created " + created + " weekly partition(s).");
+                }
+            }
+            catch (Throwable t) {
+                t.printStackTrace();
+            }
+        }
     }
 
     private static String nonEmpty(String preferred, String fallback) {
