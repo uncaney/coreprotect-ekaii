@@ -48,6 +48,8 @@ public class Config extends Language {
     public String POSTGRES_PASSWORD;
     public int POSTGRES_PORT;
     public boolean POSTGRES_SSL;
+    public boolean POSTGRES_PARTITIONING;
+    public boolean POSTGRES_LZ4;
     public boolean RETENTION_ENABLED;
     public String RETENTION_KEEP;
     public String RETENTION_SCHEDULE;
@@ -121,6 +123,8 @@ public class Config extends Language {
         DEFAULT_VALUES.put("postgres-username", "coreprotect");
         DEFAULT_VALUES.put("postgres-password", "");
         DEFAULT_VALUES.put("postgres-ssl", "false");
+        DEFAULT_VALUES.put("postgres-partitioning", "true");
+        DEFAULT_VALUES.put("postgres-lz4", "true");
         DEFAULT_VALUES.put("retention-enabled", "false");
         DEFAULT_VALUES.put("retention-keep", "60d");
         DEFAULT_VALUES.put("retention-schedule", "0 4 * * *");
@@ -243,6 +247,8 @@ public class Config extends Language {
         this.POSTGRES_USERNAME = this.getString("postgres-username");
         this.POSTGRES_PASSWORD = this.getString("postgres-password");
         this.POSTGRES_SSL = this.getBoolean("postgres-ssl", false);
+        this.POSTGRES_PARTITIONING = this.getBoolean("postgres-partitioning", true);
+        this.POSTGRES_LZ4 = this.getBoolean("postgres-lz4", true);
         this.RETENTION_ENABLED = this.getBoolean("retention-enabled", false);
         this.RETENTION_KEEP = this.getString("retention-keep");
         this.RETENTION_SCHEDULE = this.getString("retention-schedule");

@@ -221,3 +221,5 @@ docs/dev/
 !/src/main/java/net/coreprotect/utility/extensions/Extensions.java
 /.apt_generated/
 /.apt_generated_tests/
+bench/.venv/
+bench/results/_sqlite.db
