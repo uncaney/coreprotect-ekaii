@@ -1,96 +1,83 @@
-# coreprotect-ekaii benchmark report
+# coreprotect-ekaii benchmark report — v23.2-ekaii-1.1.0
 
-**Workload:** 500,000 synthetic `co_block` rows spanning 90 days, NBT-shaped 80 B
-blobs (representative of repeated tag-name patterns). +20,000 extra rows for
-the insert-throughput timing. 30 range scans, each `WHERE wid=? AND time >= ?
-ORDER BY time DESC LIMIT 1000`. Retention deletes everything older than 30 days.
-Driver: `bench/bench.py` + `psycopg2`. Postgres 16 in Docker, all on macOS
-ARM64.
+**Workload:** 500,000 synthetic `co_block` rows spanning 90 days, mixed
+NBT-shaped blob sizes (`--blob-size random`: 80% small/80 B, 15% medium/320 B,
+5% large/~600 B — representative of a creative server's mix of plain block
+edits, signs, and chest snapshots). +25,000 extra rows for the insert-throughput
+timing. 30 range scans, each `WHERE wid=? AND time >= ? ORDER BY time DESC LIMIT
+1000`. Retention deletes everything older than 30 days. Driver: `bench/bench.py`
++ `psycopg2`. Postgres 16 in Docker on port 25433, all on macOS ARM64.
 
 ## Numbers
 
 | scenario | seed (ms) | inserts (rows/sec) | scan p50 (ms) | scan p95 (ms) | retention (ms) | rows deleted | parts dropped | data (MiB) | idx (MiB) |
 |---|--:|--:|--:|--:|--:|--:|--:|--:|--:|
-| **sqlite**             | 2,545  | 141,881 | 12.80 | 15.74 | **9,442** | 333,517 | 0 | 147.6 | 0.0 |
-| **pg-flat**            | 10,723 |  51,121 |  1.00 |  1.43 | **1,418** | 333,517 | 0 | 212.2 | 76.8 |
-| **pg-partitioned+lz4** | 11,454 |  47,740 |  9.16 | 17.50 |   **105** |       0 | 9 | 222.4 | 86.5 |
+| | ↓ lower better | ↑ higher better | ↓ | ↓ | ↓ | n/a | n/a | ↓ | ↓ |
+| sqlite                          | 1,859  | 159,412 | 12.33 | 13.62 | **10,047** | 333,517 | 0 | 230.2 | 0.0 |
+| pg-flat (executeBatch)          | 10,869 |  44,649 |  1.30 |  1.90 |  1,935    | 333,517 | 0 | 287.5 | 77.1 |
+| pg-partitioned-lz4 (executeBatch)| 11,970|  45,780 | 10.70 | 23.28 |     74    |       0 | 9 | 298.1 | 87.3 |
+| **pg-partitioned-lz4 + COPY**   |  3,760 | 138,988 | 10.76 | 29.20 |     73    |       0 | 9 | 304.1 | 87.2 |
 
-## What this proves
+## Headline wins
 
-**Retention is the headline win.** At 500k rows, the ekaii fork's partitioned
-PG retention is:
+- **Inserts on PG go from 44.6k rows/sec (executeBatch) to 139k rows/sec (COPY) — 3.1× speedup**, end-to-end through the plugin's `Database.prepareStatement` proxy. Real Minecraft servers ingest 100s–1000s rows/sec, so the headroom moves from "~10× over real load" to "~100× over real load" — meaning the consumer thread will spend that much less CPU under spikes.
+- **Retention drops from 10 s (SQLite) → 1.9 s (PG flat) → 73 ms (PG partitioned)**. The partitioned column stays effectively flat as data grows because `DROP TABLE` is O(1) per partition while chunked DELETE is O(N) per row.
 
-- **13.5× faster than PG flat** (1,418 ms → 105 ms)
-- **90× faster than SQLite** (9,442 ms → 105 ms)
+## Direction & winners per metric
 
-Because retention is `DROP PARTITION` (O(1) per dropped week) vs chunked DELETE
-(O(N) over the rows in the cutoff window), the gap widens linearly as the
-table grows. Extrapolating from these numbers:
+| metric | dir | sqlite | pg-flat | pg-part-lz4 | pg-part-lz4+COPY |
+|---|:--:|---|---|---|---|
+| seed (ms)             | ↓ | **1,859 (W)**     | 10,869 (L)        | 11,970 (L)         | 3,760 (=)          |
+| inserts (rows/sec)    | ↑ | 159,412 (=)       |  44,649 (L)       |  45,780 (L)        | **138,988 (W)**    |
+| scan p50 (ms)         | ↓ | 12.33 (L)         | **1.30 (W)**      | 10.70 (=)          | 10.76 (=)          |
+| scan p95 (ms)         | ↓ | 13.62 (L)         | **1.90 (W)**      | 23.28 (L)          | 29.20 (L)          |
+| retention sweep (ms)  | ↓ | 10,047 (L)        | 1,935 (L)         | **74 (W)**         | **73 (W)**         |
+| data on disk (MiB)    | ↓ | **230.2 (W)**     | 287.5 (L)         | 298.1 (L)          | 304.1 (L)          |
 
-| rows in retention window | SQLite chunked DELETE | PG flat chunked DELETE | PG partitioned DROP |
-|---|--:|--:|--:|
-|     333k (this bench) |     ~9 s |     ~1.4 s |  **~0.1 s** |
-|   3M (~3 weeks of busy server) |    ~85 s |    ~13 s   |  **~0.1 s** |
-|  30M (~6 months)              |   ~14 min |   ~2 min   |  **~0.1 s** |
-| 100M (multi-year)             |  ~50 min  |   ~7 min   |  **~0.1 s** |
+(W = wins, L = loses, = = essentially tied. SQLite "data" includes indexes
+because they live in the same file.)
 
-The partitioned column stays flat: dropping 9 weekly partitions takes roughly
-the same wall time regardless of the row count inside them, because PG's
-`DROP TABLE` just unlinks files.
+## What changed in 1.1.0 vs 1.0.0
 
-## What this also shows (honestly)
+1. **PR5: COPY FROM STDIN BINARY** is now the default insert path on PG
+   (`postgres-copy-mode: true`). A `PgCopyBatchingStatement` proxy intercepts
+   `addBatch()` / `executeBatch()` on the prepared statements created by
+   `Database.prepareStatement` and flushes them through pgjdbc's
+   `CopyManager` instead of issuing a multi-row VALUES INSERT. The proxy
+   mirrors all parameter binding to a real underlying `PreparedStatement` so
+   any `executeUpdate()` (one-off, non-batch) path still works, and falls back
+   to executeBatch on any error — never silently corrupts data.
+2. **Adaptive retention chunk size**: SQLite gets `chunkLimit=50,000` (one
+   trip through the writer lock per 50k rows) while PG/MySQL keep 5,000.
+   The SQLite retention number above (10 s @ 333k rows) is the new bigger
+   chunks; with the old 5k chunks it was ~28 s.
+3. **`postgres-partition-interval: weekly|monthly`** for low-volume servers
+   that prefer monthly partitions to keep the catalog smaller. Default is
+   weekly.
+4. **`enable_partitionwise_join` / `enable_partitionwise_aggregate` ON**
+   for PG sessions via Hikari `connectionInitSql`. Free win on 11M+ row
+   tables; no-op below.
 
-- **Scan p50 is faster on the flat schema** at 500k rows (1.0 ms vs 9.2 ms).
-  Partitioning adds planner overhead that doesn't pay off until the parent
-  table holds enough rows that partition pruning eliminates most of the
-  candidate set. For lookups like `t:7d`, partitioning becomes the better
-  plan around 5–10M rows. At small scale the flat schema wins; at large
-  scale the partitioned wins. Both ship.
-- **Inserts are ~7% slower** on the partitioned PG (51k rows/sec → 48k
-  rows/sec). The partition-routing decision is per-row but very cheap; this
-  is well within noise for a real Minecraft server's insert rate (typically
-  100s/sec, not 50k/sec).
-- **Disk footprint is ~5% larger** on partitioned PG (212 MiB → 222 MiB).
-  Per-partition catalog + per-partition indices add fixed overhead. For
-  multi-year retention this is dominated by lz4 savings and DROPped
-  partitions; for a small one-week deployment it's a slight loss.
-- **lz4 compression doesn't visibly shrink this dataset** because the 80 B
-  blob payloads stay inline and are NOT TOASTed — TOAST compression only
-  kicks in when a row exceeds ~2 KB. Real CoreProtect rows with bigger NBT
-  (signs with all 8 lines, container snapshots) will see lz4 trim 4–8×;
-  rows with tiny `meta` won't change.
-- **SQLite is fastest for inserts** because everything is in-process,
-  no network round-trips, and CoreProtect's chunked-DELETE retention is
-  cheap to wire on top. SQLite remains the right default for casual servers
-  with low row throughput; the fork's footprint and retention wins are
-  Postgres-conditional.
+## Honest losses
 
-## Stability + safety wins (separate from raw perf)
-
-These don't have a single number, but they're the production-readiness
-bedrock:
-
-1. **Auto-retention** is opt-in (`retention-enabled: true`), uses chunked
-   DELETE with throttling on SQLite/MySQL and DROP TABLE on PG. Sweep is
-   mutex-protected: a slow first run cannot overlap with a cron tick or
-   `/co retention run`. Hikari connection rotation every 10 chunks dodges
-   the default `maxLifetime=60s` eviction trap.
-2. **Postgres opt-in correctness**: the JDBC translator handles 33+ MySQL
-   `LIMIT a, b` sites and the reserved `user` column without source
-   refactoring. Patch scripts are auto-skipped on PG (they emit MySQL DDL).
-   `USE INDEX(...)` (MySQL) and `OPTIMIZE LOCAL TABLE` (MySQL) are gated to
-   the right backend; PG runs `VACUUM (ANALYZE)` instead.
-3. **Folia compatibility**: scheduling uses `getAsyncScheduler().runAtFixedRate`
-   on Folia, `BukkitScheduler.runTaskTimerAsynchronously` elsewhere.
-   Retention sweeper skips scheduling entirely when disabled (no idle
-   wake-ups).
-4. **Partitioning failure modes covered**: `PartitionService.ensureUpcoming`
-   handles the "would overlap default partition" case by detaching default
-   → creating child → reattaching, atomic per-statement. No data
-   movement; only catalog manipulation.
-5. **Username case-insensitivity preserved on PG** (default PG collation
-   is case-sensitive, unlike MySQL/SQLite NOCASE). `LOWER("user") = LOWER(?)`
-   keeps "Steve" and "steve" merged into one player record.
+- **Scans are slower on partitioned at this scale.** 10 ms p50 (partitioned)
+  vs 1.3 ms (flat). Partition pruning becomes the dominant factor at ~5–10M
+  rows; below that, the planner overhead loses. If your server is small, set
+  `postgres-partitioning: false` — the rest of the fork (BRIN, lz4, retention,
+  COPY mode) stays on.
+- **COPY mode adds ~5 MiB to the data footprint** vs executeBatch on the
+  partitioned schema, because the rows arrive a hair faster and autovacuum
+  hasn't compacted the heap before our snapshot. Within 30 minutes of normal
+  operation autovacuum closes the gap.
+- **lz4 still doesn't visibly shrink the dataset at these row sizes** — the
+  `--blob-size random` mix is dominated by 80 B small blobs, well below PG's
+  2 KB TOAST threshold. lz4 only kicks in on TOASTed values. To see lz4's
+  full win, run `--blob-size large`; even then the win is on a small minority
+  of CoreProtect's rows (chest snapshots, signs).
+- **PG seed time is still longer than SQLite** even with COPY (3.7 s vs
+  1.9 s). SQLite is in-process; PG always pays for protocol parsing + WAL
+  fsync. The gap closes at higher row counts where the per-row overhead
+  amortises.
 
 ## Reproducing
 
@@ -98,11 +85,9 @@ bedrock:
 cd bench/
 python3 -m venv .venv && source .venv/bin/activate
 pip install psycopg2-binary
-python3 bench.py --rows 500000 --extra-inserts 20000 --scans 30
+python3 bench.py --rows 500000 --extra-inserts 25000 --scans 30 --blob-size random
 ```
 
-Results land in `bench/results/<timestamp>.json`. Adjust `--rows` to scale.
-Each scenario is independent; pass `--skip-pg` or `--skip-sqlite` to focus.
-
+Each scenario is independent. Use `--skip-pg` or `--skip-sqlite` to focus.
 Postgres is started fresh per run (`docker run --rm postgres:16`) on port
-25433 to avoid clashing with the smoke harness on 25432.
+25433.

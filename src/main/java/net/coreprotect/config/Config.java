@@ -50,6 +50,8 @@ public class Config extends Language {
     public boolean POSTGRES_SSL;
     public boolean POSTGRES_PARTITIONING;
     public boolean POSTGRES_LZ4;
+    public boolean POSTGRES_COPY_MODE;
+    public String POSTGRES_PARTITION_INTERVAL;
     public boolean RETENTION_ENABLED;
     public String RETENTION_KEEP;
     public String RETENTION_SCHEDULE;
@@ -125,6 +127,8 @@ public class Config extends Language {
         DEFAULT_VALUES.put("postgres-ssl", "false");
         DEFAULT_VALUES.put("postgres-partitioning", "true");
         DEFAULT_VALUES.put("postgres-lz4", "true");
+        DEFAULT_VALUES.put("postgres-copy-mode", "true");
+        DEFAULT_VALUES.put("postgres-partition-interval", "weekly");
         DEFAULT_VALUES.put("retention-enabled", "false");
         DEFAULT_VALUES.put("retention-keep", "60d");
         DEFAULT_VALUES.put("retention-schedule", "0 4 * * *");
@@ -249,6 +253,8 @@ public class Config extends Language {
         this.POSTGRES_SSL = this.getBoolean("postgres-ssl", false);
         this.POSTGRES_PARTITIONING = this.getBoolean("postgres-partitioning", true);
         this.POSTGRES_LZ4 = this.getBoolean("postgres-lz4", true);
+        this.POSTGRES_COPY_MODE = this.getBoolean("postgres-copy-mode", true);
+        this.POSTGRES_PARTITION_INTERVAL = this.getString("postgres-partition-interval");
         this.RETENTION_ENABLED = this.getBoolean("retention-enabled", false);
         this.RETENTION_KEEP = this.getString("retention-keep");
         this.RETENTION_SCHEDULE = this.getString("retention-schedule");

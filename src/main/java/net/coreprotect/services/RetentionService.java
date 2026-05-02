@@ -43,10 +43,21 @@ public final class RetentionService {
             "block", "container", "item", "chat", "command", "session", "sign", "skull", "entity", "username_log"
     );
 
-    private static final int CHUNK_LIMIT = 5_000;
     private static final long INTER_CHUNK_SLEEP_MS = 50;
     /** Hard ceiling on rows per table per run — protects against a multi-hour first sweep. */
     private static final int MAX_ROWS_PER_TABLE_PER_RUN = 500_000;
+
+    /**
+     * Per-backend chunk size. SQLite prefers larger chunks because each chunk
+     * round-trips through a single writer lock and a single WAL fsync; smaller
+     * chunks waste lock acquisition. PG/MySQL chunk smaller to avoid holding
+     * autovacuum back / accumulating undo.
+     */
+    private static int chunkLimit() {
+        net.coreprotect.database.Backend bk = ConfigHandler.backend();
+        if (bk == net.coreprotect.database.Backend.SQLITE) return 50_000;
+        return 5_000;
+    }
 
     private static final AtomicReference<RetentionService> INSTANCE = new AtomicReference<>();
     private final AtomicLong lastRunUnix = new AtomicLong(0);
@@ -224,7 +235,7 @@ public final class RetentionService {
                 }
                 int n;
                 try {
-                    n = dialect.purgeOldRows(connection, prefixed, beforeUnixSeconds, CHUNK_LIMIT);
+                    n = dialect.purgeOldRows(connection, prefixed, beforeUnixSeconds, chunkLimit());
                     chunksThisConnection++;
                 }
                 catch (SQLException tableMissing) {
@@ -239,7 +250,7 @@ public final class RetentionService {
                     Thread.currentThread().interrupt();
                     break;
                 }
-                if (loops > (MAX_ROWS_PER_TABLE_PER_RUN / CHUNK_LIMIT) + 8) break;
+                if (loops > (MAX_ROWS_PER_TABLE_PER_RUN / chunkLimit()) + 8) break;
             }
         }
         catch (Exception e) {
