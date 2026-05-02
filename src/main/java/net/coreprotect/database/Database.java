@@ -258,6 +258,15 @@ public class Database extends Queue {
             if (query != null) {
                 query = query.replace("%sprefix%", ConfigHandler.prefix);
                 preparedStatement = prepareStatement(connection, query, keys);
+                // PR5: route INSERT batches through COPY when running on PG.
+                // Restricted to bulk INSERT statements (keys=false); generated-key paths
+                // (skull, entity) keep the legacy executeBatch / RETURNING path.
+                if (preparedStatement != null && !keys
+                        && ConfigHandler.backend() == Backend.POSTGRES
+                        && Config.getGlobal().POSTGRES_COPY_MODE) {
+                    preparedStatement = net.coreprotect.database.dialect.PgCopyBatchingStatement
+                            .wrap(preparedStatement, connection, query);
+                }
             }
         }
         catch (Exception e) {

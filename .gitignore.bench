@@ -1,0 +1,2 @@
+bench/.venv/
+bench/results/_sqlite.db

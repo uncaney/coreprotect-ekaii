@@ -1,0 +1,62 @@
+{
+  "args": {
+    "rows": 200000,
+    "extra_inserts": 20000,
+    "scans": 20,
+    "skip_pg": false,
+    "skip_sqlite": true
+  },
+  "results": [
+    {
+      "scenario": "pg-flat",
+      "rows_seeded": 200000,
+      "seed_ms": 3806.19,
+      "insert_extra_rows": 20000,
+      "insert_ms": 388.46,
+      "insert_rows_per_sec": 51485.8,
+      "scan_count": 20,
+      "scan_p50_ms": 0.986,
+      "scan_p95_ms": 2.639,
+      "scan_max_ms": 2.639,
+      "footprint_bytes": 92004352,
+      "footprint_indexes_bytes": 31883264,
+      "retention_ms": 392.22,
+      "retention_rows_deleted": 133194,
+      "retention_partitions_dropped": 0
+    },
+    {
+      "scenario": "pg-partitioned-lz4",
+      "rows_seeded": 200000,
+      "seed_ms": 4166.22,
+      "insert_extra_rows": 20000,
+      "insert_ms": 397.26,
+      "insert_rows_per_sec": 50344.7,
+      "scan_count": 20,
+      "scan_p50_ms": 5.583,
+      "scan_p95_ms": 8.498,
+      "scan_max_ms": 8.498,
+      "footprint_bytes": 100196352,
+      "footprint_indexes_bytes": 39608320,
+      "retention_ms": 66.88,
+      "retention_rows_deleted": 0,
+      "retention_partitions_dropped": 9
+    },
+    {
+      "scenario": "pg-partitioned-lz4-copy",
+      "rows_seeded": 200000,
+      "seed_ms": 1287.3,
+      "insert_extra_rows": 20000,
+      "insert_ms": 136.49,
+      "insert_rows_per_sec": 146527.5,
+      "scan_count": 20,
+      "scan_p50_ms": 5.511,
+      "scan_p95_ms": 8.362,
+      "scan_max_ms": 8.362,
+      "footprint_bytes": 102760448,
+      "footprint_indexes_bytes": 39608320,
+      "retention_ms": 61.39,
+      "retention_rows_deleted": 0,
+      "retention_partitions_dropped": 9
+    }
+  ]
+}

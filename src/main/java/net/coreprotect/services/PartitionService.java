@@ -46,8 +46,14 @@ public final class PartitionService {
 
     private PartitionService() {}
 
-    private static final DateTimeFormatter PART_FMT = DateTimeFormatter.ofPattern("'y'yyyy'w'ww");
-    private static final Pattern PART_NAME = Pattern.compile("^(.+)_y(\\d{4})w(\\d{2})$");
+    private static final DateTimeFormatter WEEK_FMT  = DateTimeFormatter.ofPattern("'y'yyyy'w'ww");
+    private static final DateTimeFormatter MONTH_FMT = DateTimeFormatter.ofPattern("'y'yyyy'm'MM");
+    private static final Pattern PART_NAME = Pattern.compile("^(.+)_y(\\d{4})[wm](\\d{2})$");
+
+    private static boolean isMonthly() {
+        String iv = Config.getGlobal().POSTGRES_PARTITION_INTERVAL;
+        return iv != null && iv.trim().equalsIgnoreCase("monthly");
+    }
 
     /** Should we be doing partition work at all? */
     public static boolean isActive() {
@@ -55,10 +61,11 @@ public final class PartitionService {
                 && Config.getGlobal().POSTGRES_PARTITIONING;
     }
 
-    /** Ensure the partition that covers {@code now} and the next {@code lookaheadWeeks} weeks exists. */
-    public static int ensureUpcoming(int lookaheadWeeks) {
+    /** Ensure partitions covering {@code now} + {@code lookahead} intervals exist. Interval = week or month per config. */
+    public static int ensureUpcoming(int lookahead) {
         if (!isActive()) return 0;
         int created = 0;
+        boolean monthly = isMonthly();
         Connection c = null;
         try {
             c = Database.getConnection(true, false, false, 5000);
@@ -66,12 +73,24 @@ public final class PartitionService {
             c.setAutoCommit(true);
             try (Statement s = c.createStatement()) {
                 ZonedDateTime base = ZonedDateTime.now(ZoneOffset.UTC);
-                for (int w = 0; w <= lookaheadWeeks; w++) {
-                    ZonedDateTime weekStart = startOfIsoWeek(base.plusWeeks(w));
-                    ZonedDateTime weekEnd = weekStart.plusWeeks(1);
+                for (int w = 0; w <= lookahead; w++) {
+                    ZonedDateTime weekStart;
+                    ZonedDateTime weekEnd;
+                    String suffix;
+                    if (monthly) {
+                        ZonedDateTime monthStart = base.plusMonths(w).withDayOfMonth(1)
+                                .withHour(0).withMinute(0).withSecond(0).withNano(0);
+                        weekStart = monthStart;
+                        weekEnd = monthStart.plusMonths(1);
+                        suffix = "_" + monthStart.format(MONTH_FMT);
+                    }
+                    else {
+                        weekStart = startOfIsoWeek(base.plusWeeks(w));
+                        weekEnd = weekStart.plusWeeks(1);
+                        suffix = "_" + weekStart.format(WEEK_FMT);
+                    }
                     long fromUnix = weekStart.toEpochSecond();
                     long toUnix = weekEnd.toEpochSecond();
-                    String suffix = "_" + weekStart.format(PART_FMT);
                     for (String t : PostgresDialect.PARTITIONED_TABLES) {
                         String parent = ConfigHandler.prefix + t;
                         String child = parent + suffix;
@@ -217,7 +236,7 @@ public final class PartitionService {
 
     /** For tests / diagnostics: parse a partition name into {table, year, week}. */
     public static String describePartitionSuffix(Instant t) {
-        return ZonedDateTime.ofInstant(t, ZoneOffset.UTC).format(PART_FMT);
+        return ZonedDateTime.ofInstant(t, ZoneOffset.UTC).format(isMonthly() ? MONTH_FMT : WEEK_FMT);
     }
 
     /** Names of partitions currently attached to the parent. Used by retention to know what's there. */

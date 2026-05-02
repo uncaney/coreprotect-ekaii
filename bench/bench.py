@@ -102,22 +102,48 @@ CREATE INDEX block_time_index ON co_block (time);
 
 # ---------------- Helpers ----------------
 
-_NBT_TEMPLATE = (
+_NBT_SMALL = (
     b"\x00\x00\x00" + b"id:minecraft:" + b"\x00" * 8
     + b"Damage" + b"\x00" * 6 + b"RepairCost" + b"\x00" * 12
     + b"display" + b"\x00" * 8 + b"Enchantments" + b"\x00" * 10
 )
-def synthetic_blob(seed):
-    # Real NBT is mostly repeated tag names + null padding; lz4 typically gets 4-8x.
+# A larger NBT-shaped payload like a sign with all 8 lines or a chest snapshot.
+_NBT_LARGE_BASE = b"".join([
+    b"\x00\x00\x00\x06id:minecraft:chest\x00\x00\x00\x00\x00\x00\x00",
+    b"display\x00\x00\x00Name\x00\x00\x00\x00\x00\x00\x00\x00\x00",
+    b"Items\x00\x00\x00" + (b"id:minecraft:diamond_pickaxe\x00\x00\x00Count\x00\x00\x00\x01" * 8),
+    b"Enchantments\x00\x00\x00" + (b"id:minecraft:efficiency\x00\x00\x00lvl\x00\x00\x00\x05" * 4),
+    b"BlockEntityTag\x00\x00\x00" + b"\x00" * 100,
+])
+
+def _blob_size_kind(global_kind, seed):
+    # global_kind: "small" | "large" | "random"
+    if global_kind == "small": return "small"
+    if global_kind == "large": return "large"
     rnd = random.Random(seed)
-    template = bytearray(_NBT_TEMPLATE)
-    # Sprinkle a few varying bytes so dedup-style codecs don't flatten everything.
-    for _ in range(6):
+    # 80% small (basic blocks), 15% medium (signs), 5% large (containers/banners).
+    p = rnd.random()
+    if p < 0.80: return "small"
+    if p < 0.95: return "medium"
+    return "large"
+
+
+def synthetic_blob(seed, global_kind="small"):
+    """NBT-shaped data; lz4 typically gets 4-8x on the larger sizes."""
+    kind = _blob_size_kind(global_kind, seed)
+    rnd = random.Random(seed)
+    if kind == "small":
+        template = bytearray(_NBT_SMALL)
+    elif kind == "medium":
+        template = bytearray(_NBT_SMALL * 4)
+    else:  # large
+        template = bytearray(_NBT_LARGE_BASE)
+    for _ in range(min(6, len(template) // 50)):
         template[rnd.randrange(len(template))] = rnd.randrange(256)
     return bytes(template)
 
 
-def gen_rows(n, base_now, span_seconds):
+def gen_rows(n, base_now, span_seconds, blob_kind="small"):
     """Generate n synthetic block rows spread across the past span_seconds."""
     rng = random.Random(0xC0DEC0DE)
     rows = []
@@ -129,8 +155,8 @@ def gen_rows(n, base_now, span_seconds):
         z = rng.randrange(-2000, 2000)
         typ = rng.randrange(1, 200)
         data = rng.randrange(0, 16)
-        meta = synthetic_blob(i)
-        blockdata = synthetic_blob(i + 0xBEEF)
+        meta = synthetic_blob(i, blob_kind)
+        blockdata = synthetic_blob(i + 0xBEEF, blob_kind)
         action = rng.randrange(0, 4)
         rolled = 0
         rows.append((t, 1, wid, x, y, z, typ, data, meta, blockdata, action, rolled))
@@ -258,6 +284,44 @@ def pg_insert_executemany(rows):
         c.commit()
 
 
+def pg_insert_copy(rows):
+    """COPY FROM STDIN BINARY — what pgjdbc's CopyManager uses for PR5.
+
+    Binary format dodges the UTF-8 client_encoding trap when bytea columns
+    contain embedded NULs or any non-text bytes."""
+    import io, struct
+    buf = io.BytesIO()
+    # COPY binary header: signature(11) flags(4) extension_len(4)
+    buf.write(b"PGCOPY\n\xFF\r\n\x00")
+    buf.write(struct.pack(">I", 0))
+    buf.write(struct.pack(">I", 0))
+    int4 = struct.Struct(">i")
+    int2 = struct.Struct(">h")
+    nfields = struct.Struct(">h")
+    for r in rows:
+        # 12 columns: time(int4), user(int4), wid(int4), x(int4), y(int4), z(int4),
+        # type(int4), data(int4), meta(bytea), blockdata(bytea), action(int2), rolled_back(int2)
+        buf.write(nfields.pack(12))
+        for v in (r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7]):
+            buf.write(int4.pack(4))
+            buf.write(int4.pack(v))
+        meta = r[8]; blockdata = r[9]
+        buf.write(int4.pack(len(meta)));    buf.write(meta)
+        buf.write(int4.pack(len(blockdata))); buf.write(blockdata)
+        buf.write(int4.pack(2));            buf.write(int2.pack(r[10]))
+        buf.write(int4.pack(2));            buf.write(int2.pack(r[11]))
+    # trailer
+    buf.write(int2.pack(-1))
+    buf.seek(0)
+    with pg_conn() as c, c.cursor() as cur:
+        cur.copy_expert(
+            'COPY co_block (time,"user",wid,x,y,z,type,data,meta,blockdata,action,rolled_back) '
+            "FROM STDIN WITH (FORMAT binary)",
+            buf,
+        )
+        c.commit()
+
+
 def pg_chunked_delete(before_unix, table="co_block"):
     deleted = 0
     while True:
@@ -345,7 +409,7 @@ def scenario_sqlite(args, base_now):
     cur.executescript(SQLITE_DDL)
     conn.commit()
 
-    rows = gen_rows(args.rows, base_now, 90 * 86400)
+    rows = gen_rows(args.rows, base_now, 90 * 86400, args.blob_size)
 
     # Seed
     t0 = time.perf_counter()
@@ -358,7 +422,7 @@ def scenario_sqlite(args, base_now):
     seed_ms = (time.perf_counter() - t0) * 1000
 
     # Insert phase
-    extra = gen_rows(args.extra_inserts, base_now, 86400)
+    extra = gen_rows(args.extra_inserts, base_now, 86400, args.blob_size)
     t0 = time.perf_counter()
     cur.executemany(
         "INSERT INTO co_block (time, user, wid, x, y, z, type, data, meta, blockdata, action, rolled_back)"
@@ -427,10 +491,10 @@ def scenario_sqlite(args, base_now):
     }
 
 
-def scenario_pg(args, base_now, label, partitioned, lz4):
+def scenario_pg(args, base_now, label, partitioned, lz4, copy_mode=False):
     pg_apply(PG_PART_DDL if partitioned else PG_FLAT_DDL)
 
-    rows = gen_rows(args.rows, base_now, 90 * 86400)
+    rows = gen_rows(args.rows, base_now, 90 * 86400, args.blob_size)
 
     if partitioned:
         pg_seed_partitions(rows, base_now)
@@ -444,17 +508,18 @@ def scenario_pg(args, base_now, label, partitioned, lz4):
                 pg_exec(sql)
 
     # Seed
+    insert = pg_insert_copy if copy_mode else pg_insert_executemany
     t0 = time.perf_counter()
-    pg_insert_executemany(rows)
+    insert(rows)
     seed_ms = (time.perf_counter() - t0) * 1000
 
     # ANALYZE for fair planning.
     pg_exec("ANALYZE co_block")
 
     # Insert phase
-    extra = gen_rows(args.extra_inserts, base_now, 86400)
+    extra = gen_rows(args.extra_inserts, base_now, 86400, args.blob_size)
     t0 = time.perf_counter()
-    pg_insert_executemany(extra)
+    insert(extra)
     ins_ms = (time.perf_counter() - t0) * 1000
     insert_throughput = args.extra_inserts / (ins_ms / 1000.0)
 
@@ -518,6 +583,9 @@ def main():
     ap.add_argument("--rows", type=int, default=100_000, help="seed rows in co_block (default 100k)")
     ap.add_argument("--extra-inserts", type=int, default=10_000, help="rows for the insert-phase timing")
     ap.add_argument("--scans", type=int, default=25)
+    ap.add_argument("--blob-size", choices=["small", "medium", "large", "random"], default="small",
+                    help="meta/blockdata blob shape: small=80B (default block edits), medium=320B (signs), "
+                         "large=~600B (chest snapshots), random=mixed 80%/15%/5%.")
     ap.add_argument("--skip-pg", action="store_true")
     ap.add_argument("--skip-sqlite", action="store_true")
     args = ap.parse_args()
@@ -537,8 +605,10 @@ def main():
             start_pg()
             print(">> PG flat (no partitioning, no lz4) ...", flush=True)
             results.append(scenario_pg(args, base_now, "pg-flat", partitioned=False, lz4=False))
-            print(">> PG partitioned + BRIN + lz4 ...", flush=True)
+            print(">> PG partitioned + BRIN + lz4 (executeBatch) ...", flush=True)
             results.append(scenario_pg(args, base_now, "pg-partitioned-lz4", partitioned=True, lz4=True))
+            print(">> PG partitioned + BRIN + lz4 + COPY ...", flush=True)
+            results.append(scenario_pg(args, base_now, "pg-partitioned-lz4-copy", partitioned=True, lz4=True, copy_mode=True))
         finally:
             stop_pg()
 

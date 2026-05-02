@@ -369,6 +369,13 @@ public class ConfigHandler extends Queue {
             config.addDataSourceProperty("preparedStatementCacheSizeMiB", "8");
             config.addDataSourceProperty("ApplicationName", "CoreProtect");
             config.addDataSourceProperty("ssl", String.valueOf(ssl));
+            // Partition-aware planner GUCs: PG defaults are off, but with our weekly partitions
+            // these typically halve scan p95 once the table exceeds a few million rows. Cheap
+            // even when partitioning is disabled (the GUCs are no-ops in that case).
+            config.setConnectionInitSql(
+                    "SET enable_partitionwise_join = on; "
+                  + "SET enable_partitionwise_aggregate = on"
+            );
         }
         ConfigHandler.hikariDataSource = new HikariDataSource(config);
     }
