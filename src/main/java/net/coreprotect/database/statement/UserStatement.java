@@ -70,11 +70,19 @@ public class UserStatement {
 
         try {
             String collate = "";
-            if (!Config.getGlobal().MYSQL) {
+            String userExpr = "user";
+            net.coreprotect.database.Backend bk = net.coreprotect.config.ConfigHandler.backend();
+            if (bk == net.coreprotect.database.Backend.SQLITE) {
                 collate = " COLLATE NOCASE";
             }
+            else if (bk == net.coreprotect.database.Backend.POSTGRES) {
+                // PG default collation is case-sensitive; lookup with LOWER() to match
+                // legacy MySQL/SQLite behaviour (Steve and steve resolve to the same row).
+                userExpr = "LOWER(user)";
+            }
 
-            String where = "user = ?" + collate;
+            String rhs = (bk == net.coreprotect.database.Backend.POSTGRES) ? "LOWER(?)" : "?";
+            String where = userExpr + " = " + rhs + collate;
             if (uuid != null) {
                 where = where + " OR uuid = ?";
             }

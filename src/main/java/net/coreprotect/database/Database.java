@@ -137,7 +137,10 @@ public class Database extends Queue {
     }
 
     public static boolean hasReturningKeys() {
-        return (!Config.getGlobal().MYSQL && ConfigHandler.SERVER_VERSION >= 20);
+        Backend bk = ConfigHandler.backend();
+        if (bk == Backend.POSTGRES) return true;        // PG always supports RETURNING
+        if (bk == Backend.SQLITE)   return ConfigHandler.SERVER_VERSION >= 20; // gated by SQLite version, mirrors legacy
+        return false;                                   // MySQL: no native RETURNING — keep RETURN_GENERATED_KEYS path
     }
 
     public static void containerBreakCheck(String user, Material type, Object container, ItemStack[] contents, Location location) {

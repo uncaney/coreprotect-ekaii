@@ -604,7 +604,8 @@ public class LookupRaw extends Queue {
             }
 
             String unionSelect = "SELECT * FROM (";
-            if (Config.getGlobal().MYSQL) {
+            net.coreprotect.database.Backend backend = net.coreprotect.config.ConfigHandler.backend();
+            if (backend == net.coreprotect.database.Backend.MYSQL) {
                 if (queryTable.equals("block")) {
                     if (radius != null && (radius[2] - radius[1]) <= 50 && (radius[6] - radius[5]) <= 50) {
                         index = "USE INDEX(wid) ";
@@ -620,6 +621,10 @@ public class LookupRaw extends Queue {
                     }
                 }
 
+                unionSelect = "(";
+            }
+            else if (backend == net.coreprotect.database.Backend.POSTGRES) {
+                // PG: no USE INDEX syntax. Skip the hint; planner is good enough with our BRIN+partial.
                 unionSelect = "(";
             }
             else {

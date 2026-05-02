@@ -248,6 +248,14 @@ public class Patch {
                     return false;
                 }
 
+                // Patch scripts (__2_5_0..__2_24_0) emit MySQL/SQLite-specific DDL like
+                // ALTER TABLE ... MODIFY ... and DROP/ADD INDEX(...) syntax that PG rejects.
+                // PG operators always start on a fresh schema written by PostgresDialect, so
+                // there is nothing to migrate; skip the patcher entirely on PG.
+                if (ConfigHandler.backend() == net.coreprotect.database.Backend.POSTGRES) {
+                    return true;
+                }
+
                 if (ConfigHandler.EDITION_BRANCH.contains("-dev")) {
                     Chat.sendConsoleMessage("§e[CoreProtect] " + Phrase.build(Phrase.DEVELOPMENT_BRANCH));
                     return true;

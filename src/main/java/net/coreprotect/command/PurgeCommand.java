@@ -519,13 +519,29 @@ public class PurgeCommand extends Consumer {
                         }
                     }
 
-                    if (Config.getGlobal().MYSQL && optimize) {
-                        Chat.sendGlobalMessage(player, Phrase.build(Phrase.PURGE_OPTIMIZING));
-                        for (String table : ConfigHandler.databaseTables) {
-                            query = "OPTIMIZE LOCAL TABLE " + ConfigHandler.prefix + table + "";
-                            preparedStmt = connection.prepareStatement(query);
-                            preparedStmt.execute();
-                            preparedStmt.close();
+                    if (optimize) {
+                        net.coreprotect.database.Backend bk = ConfigHandler.backend();
+                        if (bk == net.coreprotect.database.Backend.MYSQL) {
+                            Chat.sendGlobalMessage(player, Phrase.build(Phrase.PURGE_OPTIMIZING));
+                            for (String table : ConfigHandler.databaseTables) {
+                                query = "OPTIMIZE LOCAL TABLE " + ConfigHandler.prefix + table + "";
+                                preparedStmt = connection.prepareStatement(query);
+                                preparedStmt.execute();
+                                preparedStmt.close();
+                            }
+                        }
+                        else if (bk == net.coreprotect.database.Backend.POSTGRES) {
+                            // VACUUM ANALYZE rebuilds visibility map + plans stats; far cheaper than MySQL's OPTIMIZE.
+                            Chat.sendGlobalMessage(player, Phrase.build(Phrase.PURGE_OPTIMIZING));
+                            for (String table : ConfigHandler.databaseTables) {
+                                // VACUUM cannot run inside a transaction; use plain Statement.
+                                try (java.sql.Statement vac = connection.createStatement()) {
+                                    vac.execute("VACUUM (ANALYZE) " + ConfigHandler.prefix + table);
+                                }
+                                catch (java.sql.SQLException ignored) {
+                                    // VACUUM in a tx-bound connection — skip silently rather than abort the purge.
+                                }
+                            }
                         }
                     }
 

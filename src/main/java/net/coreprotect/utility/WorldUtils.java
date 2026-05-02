@@ -93,9 +93,16 @@ public class WorldUtils extends Queue {
 
     public static String getWidIndex(String queryTable) {
         String index = "";
-        boolean isMySQL = net.coreprotect.config.Config.getGlobal().MYSQL;
-        if (isMySQL) {
+        net.coreprotect.database.Backend backend = net.coreprotect.config.ConfigHandler.backend();
+        if (backend == net.coreprotect.database.Backend.MYSQL) {
+            // MySQL accepts the USE INDEX hint. PG rejects USE INDEX as syntax error;
+            // its planner picks the right index automatically and partial/BRIN indices
+            // would force a different choice anyway. SQLite uses its own INDEXED BY.
             index = "USE INDEX(wid) ";
+        }
+        else if (backend == net.coreprotect.database.Backend.POSTGRES) {
+            // Let PG's planner choose; partial idx on rolled_back=0 + BRIN(time) handle this.
+            index = "";
         }
         else {
             switch (queryTable) {

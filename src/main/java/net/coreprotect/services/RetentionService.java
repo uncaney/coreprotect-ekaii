@@ -7,6 +7,7 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.locks.ReentrantLock;
 
 import java.util.concurrent.TimeUnit;
 
@@ -49,6 +50,7 @@ public final class RetentionService {
 
     private static final AtomicReference<RetentionService> INSTANCE = new AtomicReference<>();
     private final AtomicLong lastRunUnix = new AtomicLong(0);
+    private final ReentrantLock sweepLock = new ReentrantLock();
     private volatile MiniCron cron;
     private volatile long keepSeconds;
     private volatile boolean enabled;
@@ -68,6 +70,10 @@ public final class RetentionService {
     public void start(CoreProtect plugin) {
         reloadFromConfig();
         stop();
+        if (!enabled || keepSeconds <= 0) {
+            // Skip scheduling entirely when disabled — no need to wake up every minute.
+            return;
+        }
         Runnable tick = this::tick;
         if (ConfigHandler.isFolia) {
             // Folia exposes a per-thread async scheduler that supports fixed-rate tasks.
@@ -112,21 +118,34 @@ public final class RetentionService {
         this.keepSeconds = HumanDuration.parseSeconds(spec);
     }
 
-    /** Forces an immediate sweep, bypassing the cron schedule. */
+    /**
+     * Forces an immediate sweep, bypassing the cron schedule. Mutex-protected:
+     * if a previous sweep is still in flight (large keep delta on a busy server
+     * can take more than the 60-second tick interval), the second caller is
+     * told it overlapped instead of doubling up DELETEs against the same ctid set.
+     */
     public Summary runNow() {
         if (keepSeconds <= 0) return Summary.skipped("retention-keep is 0/disabled");
         Dialect dialect = ConfigHandler.dialect();
         if (dialect == null) return Summary.skipped("no active dialect (DB not loaded)");
-        long before = (System.currentTimeMillis() / 1000L) - keepSeconds;
-        int totalDeleted = 0;
-        long started = System.currentTimeMillis();
-        for (String table : RETAINABLE_TABLES) {
-            int deleted = purgeTable(dialect, table, before);
-            totalDeleted += deleted;
+        if (!sweepLock.tryLock()) {
+            return Summary.skipped("another retention sweep is already in flight");
         }
-        lastRunUnix.set(System.currentTimeMillis() / 1000L);
-        long elapsed = System.currentTimeMillis() - started;
-        return Summary.success(totalDeleted, elapsed);
+        try {
+            long before = (System.currentTimeMillis() / 1000L) - keepSeconds;
+            int totalDeleted = 0;
+            long started = System.currentTimeMillis();
+            for (String table : RETAINABLE_TABLES) {
+                int deleted = purgeTable(dialect, table, before);
+                totalDeleted += deleted;
+            }
+            lastRunUnix.set(System.currentTimeMillis() / 1000L);
+            long elapsed = System.currentTimeMillis() - started;
+            return Summary.success(totalDeleted, elapsed);
+        }
+        finally {
+            sweepLock.unlock();
+        }
     }
 
     private void tick() {
@@ -135,29 +154,44 @@ public final class RetentionService {
         long nowUnix = now.getEpochSecond();
         long lastRun = lastRunUnix.get();
         // Compute the most recent scheduled firing time at or before "now".
-        // We approximate by asking next() from a point one minute ago; if the resulting
-        // instant is in the past, we should run.
         Instant prevFire = cron.next(now.minusSeconds(60));
         if (prevFire.isAfter(now)) return; // not due yet
-        // Don't double-fire within the same minute.
         if (lastRun > 0 && nowUnix - lastRun < 30) return;
+        // Skip if a sweep is already running (held by /co retention run, or a slow prior tick).
+        if (sweepLock.isLocked()) return;
         Summary s = runNow();
         Chat.sendConsoleMessage(Color.DARK_AQUA + "[CoreProtect] " + Color.WHITE + "Retention sweep: " + s);
     }
 
+    /**
+     * Acquire a fresh connection per chunk-batch. Hikari's default
+     * {@code maxLifetime=60_000ms} (set in ConfigHandler#openHikariFor) would
+     * evict the connection mid-sweep on a busy table; rotating sidesteps that
+     * and gives PG/MySQL a chance to break long DELETE locks between batches.
+     * The cost (one Hikari acquire per ~10 chunks) is negligible — the inner
+     * 50 ms inter-chunk sleep dominates.
+     */
     private int purgeTable(Dialect dialect, String unprefixedTable, long beforeUnixSeconds) {
         String prefixed = ConfigHandler.prefix + unprefixedTable;
-        Connection connection = null;
         int deleted = 0;
+        int chunksThisConnection = 0;
+        Connection connection = null;
         try {
-            connection = Database.getConnection(true, false, false, 5000);
-            if (connection == null) return 0;
-            connection.setAutoCommit(true);
             int loops = 0;
             while (deleted < MAX_ROWS_PER_TABLE_PER_RUN) {
+                if (connection == null || chunksThisConnection >= 10) {
+                    if (connection != null) {
+                        try { connection.close(); } catch (SQLException ignored) {}
+                    }
+                    connection = Database.getConnection(true, false, false, 5000);
+                    chunksThisConnection = 0;
+                    if (connection == null) return deleted;
+                    connection.setAutoCommit(true);
+                }
                 int n;
                 try {
                     n = dialect.purgeOldRows(connection, prefixed, beforeUnixSeconds, CHUNK_LIMIT);
+                    chunksThisConnection++;
                 }
                 catch (SQLException tableMissing) {
                     // Table may not exist yet (e.g., fresh install); skip silently.
@@ -171,7 +205,7 @@ public final class RetentionService {
                     Thread.currentThread().interrupt();
                     break;
                 }
-                if (loops > (MAX_ROWS_PER_TABLE_PER_RUN / CHUNK_LIMIT) + 8) break; // belt and braces
+                if (loops > (MAX_ROWS_PER_TABLE_PER_RUN / CHUNK_LIMIT) + 8) break;
             }
         }
         catch (Exception e) {

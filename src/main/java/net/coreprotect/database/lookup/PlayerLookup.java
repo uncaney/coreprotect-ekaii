@@ -20,11 +20,18 @@ public class PlayerLookup {
             }
 
             String collate = "";
-            if (!Config.getGlobal().MYSQL) {
+            String userExpr = "user";
+            String rhs = "?";
+            net.coreprotect.database.Backend bk = ConfigHandler.backend();
+            if (bk == net.coreprotect.database.Backend.SQLITE) {
                 collate = " COLLATE NOCASE";
             }
+            else if (bk == net.coreprotect.database.Backend.POSTGRES) {
+                userExpr = "LOWER(user)";
+                rhs = "LOWER(?)";
+            }
 
-            String query = "SELECT rowid as id, uuid FROM " + ConfigHandler.prefix + "user WHERE user = ?" + collate + " LIMIT 0, 1";
+            String query = "SELECT rowid as id, uuid FROM " + ConfigHandler.prefix + "user WHERE " + userExpr + " = " + rhs + collate + " LIMIT 0, 1";
             PreparedStatement preparedStmt = connection.prepareStatement(query);
             preparedStmt.setString(1, user);
 
