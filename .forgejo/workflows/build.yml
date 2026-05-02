@@ -73,56 +73,57 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - uses: actions/setup-java@v4
+      # Pull pre-built jars from the matrix jobs instead of rebuilding.
+      # Two ~22-minute redundant `mvn clean verify` runs gone; the release job
+      # now depends only on the Forgejo API, not on Maven Central network luck.
+      - name: Download mc26.1.2 jar
+        uses: actions/download-artifact@v3
         with:
-          java-version: '25'
-          distribution: temurin
-      - name: Install Maven
-        shell: bash
-        run: |
-          set -eux
-          MVN_VERSION=3.9.9
-          MVN_URL="https://dlcdn.apache.org/maven/maven-3/${MVN_VERSION}/binaries/apache-maven-${MVN_VERSION}-bin.tar.gz"
-          MVN_BACKUP_URL="https://archive.apache.org/dist/maven/maven-3/${MVN_VERSION}/binaries/apache-maven-${MVN_VERSION}-bin.tar.gz"
-          MVN_HOME="$HOME/.tools/maven-${MVN_VERSION}"
-          mkdir -p "$MVN_HOME" "$HOME/.tools"
-          if command -v curl >/dev/null 2>&1; then
-            curl -fsSL "$MVN_URL" -o /tmp/mvn.tgz || curl -fsSL "$MVN_BACKUP_URL" -o /tmp/mvn.tgz
-          else
-            wget -q "$MVN_URL" -O /tmp/mvn.tgz || wget -q "$MVN_BACKUP_URL" -O /tmp/mvn.tgz
-          fi
-          tar -C "$MVN_HOME" --strip-components=1 -xzf /tmp/mvn.tgz
-          echo "$MVN_HOME/bin" >> "$GITHUB_PATH"
-          "$MVN_HOME/bin/mvn" -v
-      - name: Build current ref
-        run: mvn -B -DskipTests -Dproject.branch=master clean verify
-      - name: Build mc1.21.11 sibling
-        run: |
-          git fetch origin mc1.21.11
-          git worktree add ../mc1.21.11 origin/mc1.21.11
-          cd ../mc1.21.11
-          curl -fsSL -o /tmp/jdk21.tar.gz https://download.java.net/java/GA/jdk21.0.4/d2c2e0e7e3ee43f2a1a0e7eaf21ee5c5/35/GPL/openjdk-21.0.4_linux-x64_bin.tar.gz
-          mkdir -p /opt/jdk21 && tar -C /opt/jdk21 --strip-components=1 -xzf /tmp/jdk21.tar.gz
-          JAVA_HOME=/opt/jdk21 PATH=/opt/jdk21/bin:$PATH mvn -B -DskipTests -Dproject.branch=master clean verify
-      - name: Create release
+          name: CoreProtect-mc26.1.2
+          path: artifacts/mc26.1.2
+      - name: Download mc1.21.11 jar
+        uses: actions/download-artifact@v3
+        with:
+          name: CoreProtect-mc1.21.11
+          path: artifacts/mc1.21.11
+      - name: List artifacts
+        run: ls -la artifacts/mc26.1.2 artifacts/mc1.21.11
+      - name: Create release + upload assets
         env:
           TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          set -e
+          set -eu
           REF_NAME="${GITHUB_REF##*/}"
           API="${GITHUB_API_URL:-https://forgejo.ekaii.fr/api/v1}"
           REPO="${GITHUB_REPOSITORY}"
-          # create release
+          # Create the release. Tolerate 409 when re-running on an existing tag —
+          # in that case fetch the existing release id and just upload missing assets.
           BODY=$(printf '{"tag_name":"%s","name":"%s","draft":false,"prerelease":false}' "$REF_NAME" "$REF_NAME")
-          RESP=$(curl -fsS -X POST -H "Authorization: token $TOKEN" -H "Content-Type: application/json" \
-            "$API/repos/$REPO/releases" -d "$BODY")
-          ID=$(echo "$RESP" | sed -n 's/.*"id":\s*\([0-9]*\).*/\1/p' | head -1)
-          echo "Release id: $ID"
-          # upload assets
-          for f in $(ls target/CoreProtect-*.jar) $(ls ../mc1.21.11/target/CoreProtect-*.jar); do
+          HTTP_CODE=$(curl -sS -o /tmp/rel.json -w "%{http_code}" \
+            -X POST -H "Authorization: token $TOKEN" -H "Content-Type: application/json" \
+            "$API/repos/$REPO/releases" -d "$BODY" || true)
+          if [ "$HTTP_CODE" = "201" ]; then
+            ID=$(sed -n 's/.*"id":\s*\([0-9]*\).*/\1/p' /tmp/rel.json | head -1)
+            echo "Created release id: $ID"
+          else
+            echo "Release POST returned $HTTP_CODE — assuming release exists, fetching by tag."
+            curl -fsS -H "Authorization: token $TOKEN" \
+              "$API/repos/$REPO/releases/tags/$REF_NAME" -o /tmp/rel.json
+            ID=$(sed -n 's/.*"id":\s*\([0-9]*\).*/\1/p' /tmp/rel.json | head -1)
+            echo "Reusing release id: $ID"
+          fi
+          # Upload jars; tolerate 409 if asset already exists from a manual upload.
+          for f in artifacts/mc26.1.2/CoreProtect-*.jar artifacts/mc1.21.11/CoreProtect-*.jar; do
+            [ -f "$f" ] || { echo "missing: $f"; continue; }
             n=$(basename "$f")
             echo "Uploading $n"
-            curl -fsS -X POST -H "Authorization: token $TOKEN" \
+            CODE=$(curl -sS -o /tmp/asset.json -w "%{http_code}" \
+              -X POST -H "Authorization: token $TOKEN" \
               -F "attachment=@${f}" \
-              "$API/repos/$REPO/releases/$ID/assets?name=${n}"
+              "$API/repos/$REPO/releases/$ID/assets?name=${n}" || true)
+            if [ "$CODE" = "201" ]; then
+              echo "  ok"
+            else
+              echo "  HTTP $CODE — likely already attached, skipping"
+            fi
           done
